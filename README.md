@@ -4,6 +4,14 @@ PWA de streaming musical com interface **Glassmorphism**, reprodução em segund
 
 > **Status:** projeto experimental/educacional. O catálogo, previews, letras e streams dependem de serviços externos e podem sofrer limitações de disponibilidade, região, CORS ou mudanças de API.
 
+
+## 📱 Interface Mobile
+
+<img width="334" height="600" alt="GlassmMusicHome" src="https://github.com/user-attachments/assets/bb7afd6e-7a36-4913-aefe-fe96768e37e0" />
+<img width="334" height="600" alt="GlassMusicCapa" src="https://github.com/user-attachments/assets/b954f7b8-480f-4a24-9a94-f8116c30f595" />
+<img width="334" height="600" alt="GlassMusicLetras" src="https://github.com/user-attachments/assets/30387f5c-5e55-4a63-a672-136912450828" />
+
+
 ## ✨ Funcionalidades
 
 - Busca de músicas pelo catálogo público do iTunes Search API.
