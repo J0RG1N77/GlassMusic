@@ -1,0 +1,2 @@
+﻿/* Glass effect layer. Base rules live in tokens.css for compatibility with the original visual system. */
+.glass-panel, .glass-card, .glass-chip { isolation: isolate; }

@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#06070a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Glass Music">
+  <meta name="description" content="Glass Music - Streaming de música gratuito, sem anúncios, com estética de vidro fosco e reprodução em segundo plano.">
+  <link rel="icon" href="./glassmusic.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./glassmusic.svg">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles/tokens.css">
+  <link rel="stylesheet" href="./styles/glass.css">
+  <link rel="stylesheet" href="./styles/layout.css">
+  <link rel="stylesheet" href="./styles/components.css">
+  <title>Glass Music - Streaming & Glassmorphism Player</title>
+</head>
+<body class="antialiased selection:bg-sky-400/30 selection:text-white">
+  <!-- Elemento de Áudio Nativo HTML5 (Permite reprodução contínua em segundo plano no Android & iOS) -->
+  <audio id="native-audio" preload="metadata" crossorigin="anonymous"></audio>
+
+  <!-- Camada de Iluminação Ambiente Dinâmica (Capa 1000x1000 ampliada 1.35x + Blur 80px) -->
+  <div id="ambient-backdrop" aria-hidden="true">
+    <img id="ambient-img-a" class="ambient-layer opacity-80" src="" alt="" />
+    <img id="ambient-img-b" class="ambient-layer opacity-0" src="" alt="" />
+    <div class="ambient-vignette"></div>
+  </div>
+
+  <!-- Container Principal da Aplicação -->
+  <div id="app-shell" class="relative z-10 flex h-[100dvh] w-full overflow-hidden">
+
+    <!-- ======================================================================
+         BARRA LATERAL DE NAVEGAÇÃO (DESKTOP >= 768px)
+         ====================================================================== -->
+    <aside class="hidden md:flex md:w-64 lg:w-72 flex-col justify-between p-4 shrink-0 h-full pb-28">
+      <div class="glass-panel rounded-3xl flex flex-col h-full overflow-hidden">
+        <!-- Logo Glass Music -->
+        <div class="p-5 flex items-center justify-between border-b border-white/10">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-2xl flex items-center justify-center relative overflow-hidden"
+                 style="background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.38), rgba(255,255,255,0.08)); border-top: 1px solid rgba(255,255,255,0.35); border-left: 1px solid rgba(255,255,255,0.2);">
+              <i data-lucide="disc-3" class="w-5 h-5 accent-text"></i>
+            </div>
+            <div>
+              <h1 class="font-bold text-base tracking-tight text-white leading-tight">Glass Music</h1>
+              <span class="text-[11px] font-medium text-white/50 tracking-wider uppercase">Hi-Fi Glass PWA</span>
+            </div>
+          </div>
+          <button id="btn-install-pwa-desktop" class="hidden glass-chip p-2 rounded-xl text-white/80 hover:text-white" title="Instalar App (PWA)">
+            <i data-lucide="download" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- Menu Principal -->
+        <nav class="p-3 space-y-1">
+          <button data-view="explore" class="nav-item active w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-white/75 hover:text-white hover:bg-white/5 transition">
+            <i data-lucide="compass" class="w-4 h-4"></i>
+            <span>Explorar</span>
+          </button>
+          <button data-view="favorites" class="nav-item w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium text-white/75 hover:text-white hover:bg-white/5 transition">
+            <span class="flex items-center gap-3">
+              <i data-lucide="heart" class="w-4 h-4"></i>
+              <span>Favoritos</span>
+            </span>
+            <span id="badge-favorites-count" class="text-[11px] font-mono-tech px-2 py-0.5 rounded-full bg-white/10 text-white/70">0</span>
+          </button>
+          <button data-view="history" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-white/75 hover:text-white hover:bg-white/5 transition">
+            <i data-lucide="history" class="w-4 h-4"></i>
+            <span>Historico</span>
+          </button>
+          <button id="btn-open-customizer-sidebar" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-white/75 hover:text-white hover:bg-white/5 transition">
+            <i data-lucide="sliders-horizontal" class="w-4 h-4 accent-text"></i>
+            <span>Personalizar Vidro</span>
+          </button>
+        </nav>
+
+        <!-- Seção de Playlists Locais -->
+        <div class="px-4 pt-3 pb-2 flex items-center justify-between border-t border-white/10">
+          <span class="text-xs font-semibold uppercase tracking-wider text-white/45">Suas Playlists</span>
+          <button id="btn-new-playlist-sidebar" class="glass-chip p-1.5 rounded-lg text-white/80 hover:text-white" title="Nova Playlist">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+
+        <div id="sidebar-playlists-list" class="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+          <!-- Playlists renderizadas dinamicamente via JS -->
+        </div>
+
+        <!-- Status Discreto do Backend Node.js -->
+        <div class="p-3 border-t border-white/10">
+          <button id="btn-backend-pill-sidebar" class="w-full glass-chip rounded-2xl px-3 py-2 flex items-center justify-between text-left">
+            <div class="flex items-center gap-2 min-w-0">
+              <span id="backend-dot-sidebar" class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
+              <span id="backend-label-sidebar" class="text-xs text-white/75 truncate">Verificando Proxy...</span>
+            </div>
+            <i data-lucide="settings-2" class="w-3.5 h-3.5 text-white/45 shrink-0"></i>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ======================================================================
+         ÁREA DE CONTEÚDO PRINCIPAL (BUSCA + GRADE RESPONSIVA + LETRAS DESKTOP)
+         ====================================================================== -->
+    <div class="flex-1 flex flex-col h-full min-w-0 relative">
+
+      <!-- Cabeçalho Flutuante de Busca & Chips -->
+      <header class="px-4 md:px-6 pt-3 md:pt-4 pb-2 shrink-0 z-20" style="padding-top: max(0.75rem, var(--safe-top));">
+        <div class="glass-panel rounded-3xl p-3 md:p-3.5 flex flex-col gap-3">
+          <div class="flex items-center gap-2.5">
+            <!-- Logo Compacto Mobile -->
+            <div class="flex md:hidden items-center gap-2 shrink-0 pr-1">
+              <div class="w-9 h-9 rounded-xl flex items-center justify-center"
+                   style="background: rgba(var(--accent-rgb), 0.25); border-top: 1px solid rgba(255,255,255,0.3);">
+                <i data-lucide="disc-3" class="w-5 h-5 accent-text"></i>
+              </div>
+            </div>
+
+            <!-- Barra de Busca de Vidro -->
+            <div class="relative flex-1 min-w-0">
+              <i data-lucide="search" class="w-4 h-4 text-white/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+              <input
+                id="search-input"
+                type="search"
+                autocomplete="off"
+                placeholder="Buscar musicas, artistas ou Albuns..."
+                class="w-full bg-white/[0.06] hover:bg-white/[0.09] focus:bg-white/[0.11] text-sm text-white placeholder-white/40 pl-10 pr-9 py-2.5 rounded-2xl border border-white/10 focus:border-white/30 focus:outline-none transition"
+              />
+              <button id="btn-clear-search" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/50 hover:text-white hover:bg-white/10">
+                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+
+            <!-- Selo Técnico Discreto de Qualidade Real do Áudio (Desktop) -->
+            <div id="tech-badge-header" class="hidden lg:flex items-center gap-2 px-3 py-2 rounded-2xl bg-black/30 border border-white/10 shrink-0" title="Qualidade técnica da fonte de áudio atual">
+              <i data-lucide="activity" class="w-3.5 h-3.5 accent-text"></i>
+              <span id="tech-badge-header-text" class="font-mono-tech text-[11px] text-white/80 tracking-tight">PRONTO • 48kHz</span>
+            </div>
+
+            <!-- Botão Motor de Personalização em Tempo Real -->
+            <button id="btn-open-customizer-top" class="glass-chip px-3.5 py-2.5 rounded-2xl flex items-center gap-2 text-xs font-semibold text-white shrink-0" title="Motor de Personalização do Vidro">
+              <i data-lucide="sparkles" class="w-4 h-4 accent-text"></i>
+              <span class="hidden sm:inline">Personalizar</span>
+            </button>
+          </div>
+
+          <!-- Chips Rápidos de Gêneros & Artistas -->
+          <div id="genre-chips-bar" class="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5">
+            <!-- Chips preenchidos dinamicamente via JS -->
+          </div>
+        </div>
+      </header>
+
+      <!-- Corpo Rolável: Catálogo de Músicas + Gaveta Lateral de Letras (Desktop) -->
+      <div class="flex-1 flex min-h-0 px-4 md:px-6 pb-36 md:pb-28 gap-4 overflow-hidden">
+
+        <!-- Grade de Musicas / Playlists / Favoritos -->
+        <main id="main-scroll-area" class="flex-1 overflow-y-auto pr-1 pt-2">
+          <!-- Cabeçalho Contextual da Seção -->
+          <div id="section-header" class="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 id="section-title" class="text-xl md:text-2xl font-bold tracking-tight text-white">Em Alta Agora</h2>
+              <p id="section-subtitle" class="text-xs md:text-sm text-white/55 mt-0.5">Descobertas em alta resolução via catálogo iTunes</p>
+            </div>
+            <div id="section-actions" class="flex items-center gap-2">
+              <!-- Ações contextuais (ex: Tocar Tudo, Nova Playlist, Limpar Histórico) -->
+            </div>
+          </div>
+
+          <!-- Estado de Carregamento (Skeletons de Vidro) -->
+          <div id="loading-grid" class="hidden grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 md:gap-4">
+            <!-- Gerado via JS -->
+          </div>
+
+          <!-- Grade Responsiva de Cards de Musicas -->
+          <div id="tracks-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 md:gap-4 pb-6">
+            <!-- Cards gerados dinamicamente via JS -->
+          </div>
+
+          <!-- Visão Dedicada de Playlists (Mobile) -->
+          <div id="mobile-playlists-view" class="hidden space-y-4 pb-8">
+            <div class="glass-panel rounded-3xl p-4 flex items-center justify-between">
+              <div>
+                <h3 class="text-base font-semibold text-white">Suas Playlists Locais</h3>
+                <p class="text-xs text-white/55">Salvas no dispositivo • Áudio carregado sob demanda</p>
+              </div>
+              <button id="btn-new-playlist-mobile" class="accent-btn px-3.5 py-2 rounded-2xl text-xs flex items-center gap-1.5">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                <span>Nova</span>
+              </button>
+            </div>
+            <div id="mobile-playlists-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+          </div>
+
+          <!-- Estado Vazio -->
+          <div id="empty-state" class="hidden glass-panel rounded-3xl p-10 text-center max-w-md mx-auto my-8">
+            <div class="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="music" class="w-7 h-7 text-white/45"></i>
+            </div>
+            <h3 id="empty-state-title" class="text-base font-semibold text-white">Nenhuma faixa encontrada</h3>
+            <p id="empty-state-desc" class="text-xs text-white/55 mt-1.5 leading-relaxed">Tente buscar por outro artista, música ou explore os gêneros acima.</p>
+          </div>
+        </main>
+
+        <!-- Gaveta Lateral de Letra Sincronizada (Desktop) -->
+        <aside id="desktop-lyrics-drawer" class="hidden w-80 lg:w-96 shrink-0 pt-2 pb-2">
+          <div class="glass-panel rounded-3xl h-full flex flex-col overflow-hidden">
+            <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <i data-lucide="mic-2" class="w-4 h-4 accent-text"></i>
+                <span class="text-sm font-semibold text-white">Letra da Música</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span id="desktop-lyrics-badge" class="text-[10px] font-mono-tech uppercase px-2 py-0.5 rounded-full bg-white/10 text-white/65">LRCLIB</span>
+                <button id="btn-close-desktop-lyrics" class="p-1.5 rounded-xl text-white/55 hover:text-white hover:bg-white/10">
+                  <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+              </div>
+            </div>
+            <div id="desktop-lyrics-body" class="flex-1 overflow-y-auto px-6 py-8 lyrics-scroll-container space-y-4 text-left">
+              <p class="text-sm text-white/45 text-center mt-12">Selecione uma música para carregar a letra sincronizada.</p>
+            </div>
+          </div>
+        </aside>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       BARRA DE REPRODUÇÃO COMPLETA NO RODAPÉ (DESKTOP >= 768px)
+       ======================================================================== -->
+  <footer id="desktop-player-bar" class="hidden md:flex fixed bottom-3 left-4 right-4 z-30 glass-panel-elevated rounded-3xl px-5 py-3 items-center justify-between gap-4">
+    <!-- Esquerda: Capa, Metadados, Favorito & Selo Técnico -->
+    <div class="flex items-center gap-3.5 w-[30%] min-w-0">
+      <div class="relative w-14 h-14 rounded-2xl overflow-hidden shrink-0 bg-white/5 border border-white/15 shadow-lg group">
+        <img id="desktop-cover" src="https://placehold.co/200x200/10131c/64748b?text=GM" alt="Capa do álbum" class="w-full h-full object-cover" />
+        <div id="desktop-playing-eq" class="hidden paused absolute inset-0 bg-black/45 flex items-end justify-center gap-1 pb-3">
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+        </div>
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <h4 id="desktop-title" class="text-sm font-semibold text-white truncate">Nenhuma faixa selecionada</h4>
+          <button id="btn-desktop-fav" class="text-white/45 hover:text-rose-400 transition shrink-0" title="Favoritar">
+            <i data-lucide="heart" class="w-4 h-4"></i>
+          </button>
+          <button id="btn-desktop-add-pl" class="text-white/45 hover:text-white transition shrink-0" title="Adicionar à Playlist">
+            <i data-lucide="list-plus" class="w-4 h-4"></i>
+          </button>
+        </div>
+        <p id="desktop-artist" class="text-xs text-white/55 truncate mt-0.5">Escolha uma música para tocar</p>
+        <!-- Selo Técnico Discreto da Qualidade Real do Áudio -->
+        <div class="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/10">
+          <span id="tech-badge-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          <span id="tech-badge-player-text" class="font-mono-tech text-[10px] text-white/70 tracking-tight">STANDBY • LOSSLESS UI</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Centro: Controles de Reprodução & Barra de Progresso -->
+    <div class="flex flex-col items-center w-[40%] max-w-xl">
+      <div class="flex items-center gap-4">
+        <button id="btn-desktop-shuffle" class="p-2 rounded-xl text-white/50 hover:text-white transition" title="Aleatório">
+          <i data-lucide="shuffle" class="w-4 h-4"></i>
+        </button>
+        <button id="btn-desktop-prev" class="p-2 rounded-xl text-white/80 hover:text-white transition" title="Anterior">
+          <i data-lucide="skip-back" class="w-5 h-5"></i>
+        </button>
+        <button id="btn-desktop-play" class="accent-btn w-11 h-11 rounded-2xl flex items-center justify-center" title="Tocar / Pausar">
+          <i id="icon-desktop-play" data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>
+        </button>
+        <button id="btn-desktop-next" class="p-2 rounded-xl text-white/80 hover:text-white transition" title="Próxima">
+          <i data-lucide="skip-forward" class="w-5 h-5"></i>
+        </button>
+        <button id="btn-desktop-repeat" class="p-2 rounded-xl text-white/50 hover:text-white transition" title="Repetir">
+          <i id="icon-desktop-repeat" data-lucide="repeat" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="w-full flex items-center gap-2.5 mt-1">
+        <span id="desktop-time-current" class="font-mono-tech text-[11px] text-white/55 w-10 text-right">0:00</span>
+        <input id="desktop-progress" type="range" min="0" max="100" step="0.1" value="0" class="glass-slider flex-1" aria-label="Progresso da música" />
+        <span id="desktop-time-total" class="font-mono-tech text-[11px] text-white/55 w-10">0:00</span>
+      </div>
+    </div>
+
+    <!-- Direita: Letra Sincronizada, Volume & Tela Cheia -->
+    <div class="flex items-center justify-end gap-2.5 w-[30%]">
+      <button id="btn-desktop-lyrics" class="glass-chip px-3 py-2 rounded-xl flex items-center gap-1.5 text-xs font-medium text-white/80 hover:text-white" title="Letra Sincronizada">
+        <i data-lucide="mic-2" class="w-4 h-4"></i>
+        <span>Letra</span>
+      </button>
+
+      <div class="flex items-center gap-1.5 w-28">
+        <button id="btn-desktop-mute" class="p-1.5 rounded-lg text-white/65 hover:text-white">
+          <i id="icon-desktop-volume" data-lucide="volume-2" class="w-4 h-4"></i>
+        </button>
+        <input id="desktop-volume" type="range" min="0" max="1" step="0.01" value="0.85" class="glass-slider" aria-label="Volume" />
+      </div>
+
+      <button id="btn-desktop-expand" class="glass-chip p-2 rounded-xl text-white/75 hover:text-white" title="Modo Imersivo">
+        <i data-lucide="maximize-2" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </footer>
+
+  <!-- ========================================================================
+       MINI-PLAYER FLUTUANTE MOBILE (< 768px)
+       ======================================================================== -->
+  <div id="mobile-mini-player" class="md:hidden fixed left-3 right-3 z-30 glass-panel-elevated rounded-2xl overflow-hidden transition-transform active:scale-[0.99]"
+       style="bottom: calc(68px + var(--safe-bottom));">
+    <!-- Linha de progresso superior fina -->
+    <div class="w-full h-[2.5px] bg-white/10">
+      <div id="mobile-mini-progress-bar" class="h-full transition-all duration-150" style="width: 0%; background: var(--accent-color);"></div>
+    </div>
+
+    <div class="px-3 py-2.5 flex items-center justify-between gap-2.5">
+      <!-- Área clicável para expandir para Tela Cheia -->
+      <div id="mobile-mini-expand-area" class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+        <img id="mobile-mini-cover" src="https://placehold.co/120x120/10131c/64748b?text=GM" alt="Capa" class="w-11 h-11 rounded-xl object-cover shrink-0 border border-white/15" />
+        <div class="min-w-0 flex-1">
+          <h4 id="mobile-mini-title" class="text-xs font-semibold text-white truncate">Glass Music</h4>
+          <p id="mobile-mini-artist" class="text-[11px] text-white/55 truncate mt-0.5">Toque em uma música para ouvir</p>
+        </div>
+      </div>
+
+      <!-- Controles Rápidos Mobile -->
+      <div class="flex items-center gap-1 shrink-0">
+        <button id="btn-mobile-mini-fav" class="p-2 rounded-xl text-white/60 hover:text-rose-400">
+          <i data-lucide="heart" class="w-4 h-4"></i>
+        </button>
+        <button id="btn-mobile-mini-play" class="accent-btn w-9 h-9 rounded-xl flex items-center justify-center">
+          <i id="icon-mobile-mini-play" data-lucide="play" class="w-4 h-4 fill-current ml-0.5"></i>
+        </button>
+        <button id="btn-mobile-mini-next" class="p-2 rounded-xl text-white/80">
+          <i data-lucide="skip-forward" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       BARRA DE NAVEGAÇÃO INFERIOR MOBILE (< 768px)
+       ======================================================================== -->
+  <nav id="mobile-bottom-nav" class="md:hidden fixed bottom-0 left-0 right-0 z-30 glass-panel border-b-0 border-x-0 rounded-t-2xl px-2 pt-1.5"
+       style="padding-bottom: max(0.45rem, var(--safe-bottom));">
+    <div class="grid grid-cols-4 gap-1">
+      <button data-view="explore" class="mobile-nav-item active flex flex-col items-center justify-center py-1.5 rounded-xl text-white">
+        <i data-lucide="compass" class="w-5 h-5"></i>
+        <span class="text-[10px] font-medium mt-0.5">Explorar</span>
+      </button>
+      <button data-view="favorites" class="mobile-nav-item flex flex-col items-center justify-center py-1.5 rounded-xl text-white/55">
+        <i data-lucide="heart" class="w-5 h-5"></i>
+        <span class="text-[10px] font-medium mt-0.5">Favoritos</span>
+      </button>
+      <button data-view="playlists" class="mobile-nav-item flex flex-col items-center justify-center py-1.5 rounded-xl text-white/55">
+        <i data-lucide="list-music" class="w-5 h-5"></i>
+        <span class="text-[10px] font-medium mt-0.5">Playlists</span>
+      </button>
+      <button data-view="history" class="mobile-nav-item flex flex-col items-center justify-center py-1.5 rounded-xl text-white/55">
+        <i data-lucide="history" class="w-5 h-5"></i>
+        <span class="text-[10px] font-medium mt-0.5">Historico</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ========================================================================
+       PLAYER EM TELA CHEIA EXPANSÍVEL (MOBILE & MODO IMERSIVO DESKTOP)
+       Alternância fluida entre Capa HD (1000x1000) e Letra Sincronizada
+       ======================================================================== -->
+  <section id="mobile-fullscreen-player" class="closed fixed inset-0 z-50 flex flex-col justify-between overflow-hidden"
+           style="background: rgba(8, 10, 16, 0.72); backdrop-filter: blur(44px) saturate(185%); -webkit-backdrop-filter: blur(44px) saturate(185%); padding-top: max(1rem, var(--safe-top)); padding-bottom: max(1.25rem, var(--safe-bottom));">
+
+    <!-- Topo do Player Expansível -->
+    <div class="px-5 flex items-center justify-between gap-3 shrink-0">
+      <button id="btn-close-fullscreen" class="glass-chip p-2.5 rounded-2xl text-white/85 hover:text-white" aria-label="Minimizar player">
+        <i data-lucide="chevron-down" class="w-5 h-5"></i>
+      </button>
+
+      <!-- Seletor Segmentado: Capa HD vs Letra Sincronizada -->
+      <div class="glass-panel p-1 rounded-2xl flex items-center gap-1">
+        <button id="tab-fs-cover" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-white/15 text-white transition">
+          Capa HD
+        </button>
+        <button id="tab-fs-lyrics" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white/60 hover:text-white transition">
+          Letra
+        </button>
+      </div>
+
+      <button id="btn-fs-add-playlist" class="glass-chip p-2.5 rounded-2xl text-white/85 hover:text-white" title="Adicionar à Playlist">
+        <i data-lucide="list-plus" class="w-5 h-5"></i>
+      </button>
+    </div>
+
+    <!-- Selo Técnico Centralizado -->
+    <div class="flex justify-center mt-2 shrink-0">
+      <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/35 border border-white/10">
+        <span id="fs-tech-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+        <span id="fs-tech-badge" class="font-mono-tech text-[10px] text-white/75">AUDIO ENGINE READY</span>
+      </div>
+    </div>
+
+    <!-- Área Central Alternável (Capa HD ou Letra Sincronizada) -->
+    <div class="flex-1 flex flex-col justify-center px-6 my-2 min-h-0 overflow-hidden max-w-2xl w-full mx-auto">
+
+      <!-- Visão 1: Capa em Alta Definição (1000x1000bb) -->
+      <div id="fs-view-cover" class="flex flex-col items-center justify-center h-full">
+        <div class="relative w-full max-w-[310px] sm:max-w-[350px] aspect-square rounded-[2rem] overflow-hidden shadow-2xl border border-white/20"
+             style="box-shadow: 0 28px 65px -12px rgba(0,0,0,0.85), 0 0 50px -10px rgba(var(--accent-rgb), 0.35);">
+          <img id="fs-cover-img" src="https://placehold.co/800x800/10131c/64748b?text=Glass+Music" alt="Capa HD" class="w-full h-full object-cover transition-transform duration-700" />
+        </div>
+      </div>
+
+      <!-- Visão 2: Letra Sincronizada (LRCLIB) -->
+      <div id="fs-view-lyrics" class="hidden h-full flex flex-col overflow-hidden">
+        <div id="fs-lyrics-container" class="flex-1 overflow-y-auto py-12 px-2 lyrics-scroll-container space-y-5 text-left">
+          <p class="text-base text-white/50 text-center">Carregando letra sincronizada...</p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Rodapé do Player Tela Cheia: Info da Faixa, Progresso & Controles -->
+    <div class="px-6 max-w-2xl w-full mx-auto shrink-0 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <h2 id="fs-title" class="text-xl sm:text-2xl font-bold text-white truncate">Nenhuma faixa</h2>
+          <p id="fs-artist" class="text-sm text-white/60 truncate mt-0.5">Artista desconhecido</p>
+        </div>
+        <button id="btn-fs-fav" class="glass-chip p-3 rounded-2xl text-white/70 hover:text-rose-400 shrink-0">
+          <i data-lucide="heart" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Barra de Progresso -->
+      <div>
+        <input id="fs-progress" type="range" min="0" max="100" step="0.1" value="0" class="glass-slider w-full" aria-label="Progresso da faixa" />
+        <div class="flex justify-between font-mono-tech text-[11px] text-white/55 mt-0.5">
+          <span id="fs-time-current">0:00</span>
+          <span id="fs-time-total">0:00</span>
+        </div>
+      </div>
+
+      <!-- Botões de Controle Principais -->
+      <div class="flex items-center justify-between pt-1">
+        <button id="btn-fs-shuffle" class="p-3 rounded-2xl text-white/55 hover:text-white">
+          <i data-lucide="shuffle" class="w-5 h-5"></i>
+        </button>
+        <button id="btn-fs-prev" class="p-3 rounded-2xl text-white/85 hover:text-white">
+          <i data-lucide="skip-back" class="w-7 h-7"></i>
+        </button>
+        <button id="btn-fs-play" class="accent-btn w-16 h-16 rounded-[1.4rem] flex items-center justify-center">
+          <i id="icon-fs-play" data-lucide="play" class="w-7 h-7 fill-current ml-0.5"></i>
+        </button>
+        <button id="btn-fs-next" class="p-3 rounded-2xl text-white/85 hover:text-white">
+          <i data-lucide="skip-forward" class="w-7 h-7"></i>
+        </button>
+        <button id="btn-fs-repeat" class="p-3 rounded-2xl text-white/55 hover:text-white">
+          <i id="icon-fs-repeat" data-lucide="repeat" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================================
+       MOTOR DE PERSONALIZAÇÃO EM TEMPO REAL (PAINEL DE VIDRO FLUTUANTE)
+       ======================================================================== -->
+  <div id="customizer-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-sm">
+    <div class="glass-panel-elevated w-full max-w-lg rounded-3xl overflow-hidden max-h-[90dvh] flex flex-col">
+      <!-- Cabeçalho -->
+      <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center bg-white/10 border border-white/15">
+            <i data-lucide="sliders-horizontal" class="w-4 h-4 accent-text"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white">Motor de Personalização</h3>
+            <p class="text-[11px] text-white/55">Ajuste a óptica do vidro, atmosfera OLED e proxy de áudio</p>
+          </div>
+        </div>
+        <button id="btn-close-customizer" class="p-2 rounded-xl text-white/60 hover:text-white hover:bg-white/10">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Conteúdo Rolável -->
+      <div class="p-5 overflow-y-auto space-y-5">
+
+        <!-- 1. Cor de Destaque (Presets + Seletor Livre) -->
+        <div>
+          <div class="flex items-center justify-between mb-2.5">
+            <label class="text-xs font-semibold uppercase tracking-wider text-white/70 flex items-center gap-1.5">
+              <i data-lucide="palette" class="w-3.5 h-3.5 accent-text"></i>
+              <span>Cor de Destaque</span>
+            </label>
+            <span id="customizer-accent-hex" class="font-mono-tech text-xs text-white/60">#38BDF8</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2.5">
+            <div id="accent-presets-list" class="flex items-center gap-2 flex-wrap">
+              <!-- Bolinhas de cores geradas via JS -->
+            </div>
+            <label class="glass-chip px-3 py-1.5 rounded-xl text-xs text-white/80 cursor-pointer flex items-center gap-1.5">
+              <span>Livre</span>
+              <input id="input-accent-picker" type="color" value="#38bdf8" class="w-5 h-5 rounded cursor-pointer bg-transparent border-0 p-0" />
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. Transparência & Desfoque do Vidro em Tempo Real -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="glass-panel rounded-2xl p-3.5">
+            <div class="flex justify-between text-xs mb-1">
+              <span class="text-white/75 font-medium">Opacidade do Vidro</span>
+              <span id="val-glass-alpha" class="font-mono-tech accent-text">44%</span>
+            </div>
+            <input id="slider-glass-alpha" type="range" min="15" max="85" value="44" class="glass-slider" />
+          </div>
+
+          <div class="glass-panel rounded-2xl p-3.5">
+            <div class="flex justify-between text-xs mb-1">
+              <span class="text-white/75 font-medium">Desfoque (Blur)</span>
+              <span id="val-glass-blur" class="font-mono-tech accent-text">24px</span>
+            </div>
+            <input id="slider-glass-blur" type="range" min="0" max="48" value="24" class="glass-slider" />
+          </div>
+        </div>
+
+        <!-- 3. Modo de Fundo: Iluminação Ambiente Dinâmica vs Preto Puro OLED -->
+        <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between gap-3">
+          <div>
+            <h4 class="text-sm font-semibold text-white">Preto Puro OLED (#000000)</h4>
+            <p class="text-[11px] text-white/55 mt-0.5">Desativa o brilho dinâmico do álbum para economizar bateria em telas AMOLED</p>
+          </div>
+          <button id="toggle-oled-mode" type="button" role="switch" aria-checked="false"
+                  class="w-12 h-7 rounded-full bg-white/15 p-1 transition-colors relative shrink-0">
+            <span id="toggle-oled-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-0"></span>
+          </button>
+        </div>
+
+        <!-- 4. Servidor Proxy Node.js (Extração de Áudio Puro) -->
+        <div class="glass-panel rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <label for="input-backend-url" class="text-xs font-semibold uppercase tracking-wider text-white/75 flex items-center gap-1.5">
+              <i data-lucide="server" class="w-3.5 h-3.5 accent-text"></i>
+              <span>Servidor Proxy Node.js</span>
+            </label>
+            <span id="modal-backend-status" class="text-[11px] font-mono-tech px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">Verificando...</span>
+          </div>
+          <div class="flex gap-2">
+            <input id="input-backend-url" type="url" value="" placeholder="Usar a origem atual em HTTPS"
+                   class="flex-1 bg-black/35 text-xs font-mono-tech text-white px-3 py-2.5 rounded-xl border border-white/15 focus:border-white/40 focus:outline-none" />
+            <button id="btn-test-backend" class="glass-chip px-3.5 py-2 rounded-xl text-xs font-semibold text-white shrink-0">
+              Testar
+            </button>
+          </div>
+          <p class="text-[11px] text-white/50 leading-relaxed">
+            Se o servidor Node.js local estiver offline, o Glass Music alterna automaticamente para a prévia oficial de alta qualidade do iTunes sem interromper sua experiência.
+          </p>
+        </div>
+
+        <!-- 5. Selo Técnico Detalhado do Stream Atual -->
+        <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between">
+          <span class="text-xs text-white/60">Telemetria do Áudio Atual:</span>
+          <span id="modal-tech-telemetry" class="font-mono-tech text-xs font-semibold accent-text">STANDBY • PRONTO</span>
+        </div>
+
+      </div>
+
+      <!-- Rodapé do Modal -->
+      <div class="px-5 py-3.5 border-t border-white/10 flex items-center justify-between">
+        <button id="btn-reset-glass" class="text-xs text-white/55 hover:text-white transition">Restaurar Padrão</button>
+        <button id="btn-done-customizer" class="accent-btn px-5 py-2 rounded-xl text-xs">Concluir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       MODAL: CRIAR NOVA PLAYLIST / ADICIONAR À PLAYLIST
+       ======================================================================== -->
+  <div id="playlist-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-sm">
+    <div class="glass-panel-elevated w-full max-w-md rounded-3xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+        <h3 id="playlist-modal-title" class="text-base font-bold text-white">Nova Playlist</h3>
+        <button id="btn-close-playlist-modal" class="p-1.5 rounded-xl text-white/60 hover:text-white hover:bg-white/10">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Formulário Nova Playlist -->
+      <div id="playlist-create-body" class="p-5 space-y-4">
+        <div>
+          <label class="block text-xs text-white/65 mb-1.5">Nome da Playlist</label>
+          <input id="input-playlist-name" type="text" maxlength="40" placeholder="Ex: Treino Noturno, Viagem, Chill..."
+                 class="w-full bg-white/[0.07] text-sm text-white px-3.5 py-2.5 rounded-2xl border border-white/15 focus:border-white/40 focus:outline-none" />
+        </div>
+        <div class="flex justify-end gap-2">
+          <button id="btn-cancel-create-pl" class="glass-chip px-4 py-2 rounded-xl text-xs text-white/80">Cancelar</button>
+          <button id="btn-confirm-create-pl" class="accent-btn px-4 py-2 rounded-xl text-xs">Criar Playlist</button>
+        </div>
+      </div>
+
+      <!-- Lista para Adicionar Faixa a uma Playlist Existente -->
+      <div id="playlist-select-body" class="hidden p-5 space-y-3">
+        <p id="playlist-target-track-label" class="text-xs text-white/60 truncate"></p>
+        <div id="playlist-select-list" class="max-h-60 overflow-y-auto space-y-2">
+          <!-- Opções de playlists geradas via JS -->
+        </div>
+        <div class="pt-2 border-t border-white/10 flex justify-between items-center">
+          <button id="btn-quick-create-from-select" class="text-xs accent-text font-semibold flex items-center gap-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span>Criar nova playlist</span>
+          </button>
+          <button id="btn-close-select-pl" class="glass-chip px-3.5 py-1.5 rounded-xl text-xs text-white/80">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       MODAL DE CONFIRMAÇÃO DE VIDRO (Substitui confirm() nativo)
+       ======================================================================== -->
+  <div id="confirm-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-sm">
+    <div class="glass-panel-elevated w-full max-w-sm rounded-3xl p-5 space-y-4">
+      <h3 id="confirm-modal-title" class="text-base font-bold text-white">Confirmar ação</h3>
+      <p id="confirm-modal-desc" class="text-xs text-white/65 leading-relaxed">Tem certeza?</p>
+      <div class="flex justify-end gap-2 pt-1">
+        <button id="btn-confirm-cancel" class="glass-chip px-4 py-2 rounded-xl text-xs text-white/80">Cancelar</button>
+        <button id="btn-confirm-ok" class="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-500 text-white hover:bg-rose-400 transition">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       NOTIFICAÇÃO TOAST DE VIDRO (Substitui alert() nativo)
+       ======================================================================== -->
+  <div id="toast-container" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none max-w-xs w-full"></div>
+
+  <!-- ========================================================================
+       LÓGICA MODULAR JAVASCRIPT (API ITUNES, LRCLIB, PROXY NODE.JS, MEDIA SESSION & PWA)
+       ======================================================================== -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

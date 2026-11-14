@@ -1,0 +1,16 @@
+{
+  "name": "Glass Music - Web Music Player",
+  "short_name": "Glass Music",
+  "description": "Player de música gratuito com reprodução em segundo plano.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#06070a",
+  "theme_color": "#06070a",
+  "orientation": "portrait-primary",
+  "icons": [{
+    "src": "/glassmusic.svg ",
+    "sizes": "any",
+    "type": "image/svg+xml",
+    "purpose": "any maskable"
+  }]
+}
