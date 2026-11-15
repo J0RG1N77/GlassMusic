@@ -5,6 +5,8 @@ cookies.txt
 ytdlp-config/
 .env
 .env.*
+dist/
+desktop/bin/*.exe
 
 # Dependências e arquivos do Node.js
 node_modules/

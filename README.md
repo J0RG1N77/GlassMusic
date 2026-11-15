@@ -261,6 +261,38 @@ O App Shell é definido em `public/sw.js`. O Service Worker:
 
 Depois de alterar arquivos públicos em produção, incremente `CACHE_NAME` em `public/sw.js` ou limpe os dados do site no navegador para evitar cache antigo.
 
+## 🖥️ Aplicativo Desktop para Windows
+
+O mesmo backend e a mesma pasta `public/` também podem ser executados como aplicativo nativo Windows com Electron. O processo principal inicia o Express na porta `3001`, aguarda `/api/health` responder e abre a interface em uma `BrowserWindow` de 1200x800. Links externos são encaminhados ao navegador padrão.
+
+### Desenvolvimento
+
+Certifique-se de que `desktop/bin/yt-dlp.exe` exista localmente e execute:
+
+```bash
+npm run desktop:dev
+```
+
+Durante o desenvolvimento, o backend procura o executável em `desktop/bin/yt-dlp.exe`. Esse binário é ignorado pelo Git para evitar versionar um arquivo grande; cada ambiente de desenvolvimento deve instalar ou fornecer sua própria cópia.
+
+### Gerar o instalador
+
+```bash
+npm run desktop:build
+```
+
+O `electron-builder` gera o instalador NSIS em `dist/`. O `yt-dlp.exe` não é colocado dentro do `app.asar`; ele é copiado para `resources/bin/yt-dlp.exe` através de `extraResources`, permitindo execução no Windows empacotado.
+
+O instalador é configurado para:
+
+- usar o identificador `com.glassmusic.desktop`;
+- exibir o produto como `Glass Music`;
+- permitir instalação em diretório escolhido pelo usuário;
+- criar um instalador NSIS de 64 bits;
+- manter o frontend web/Docker e os scripts `npm start` inalterados.
+
+O executável gerado não é assinado digitalmente por padrão. Para distribuição pública, configure um certificado de assinatura de código e os parâmetros correspondentes do `electron-builder`.
+
 ## 🧩 Serviços externos
 
 - **iTunes Search API:** metadados, capas e previews.
