@@ -18,7 +18,9 @@ export const state = {
   currentTrack: null,
   displayedTracks: [],
   queue: [],
+  priorityQueue: [],
   queueIndex: -1,
+  isQueueOpen: false,
   isPlaying: false,
   backendOnline: null
 };

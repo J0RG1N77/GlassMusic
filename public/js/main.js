@@ -16,7 +16,9 @@ import { renderTrackCard } from './ui/renderers.js';
         SETTINGS: 'glass_music_settings_v1',
         FAVORITES: 'glass_music_favorites_v1',
         PLAYLISTS: 'glass_music_playlists_v1',
-        HISTORY: 'glass_music_history_v1'
+        HISTORY: 'glass_music_history_v1',
+        QUEUE: 'glass_music_queue_v1',
+        PRIORITY_QUEUE: 'glass_music_priority_queue_v1'
       };
 
       const DEFAULT_BACKEND_URL = typeof window !== 'undefined' && window.location.protocol === 'https:'
@@ -60,8 +62,11 @@ import { renderTrackCard } from './ui/renderers.js';
         activeChipQuery: DISCOVERY_CHIPS[0].query,
         displayedTracks: [],
         queue: [],
+        priorityQueue: [],
         queueIndex: -1,
         currentTrack: null,
+        isQueueOpen: false,
+        queueTab: 'queue',
         isPlaying: false,
         shuffle: false,
         repeatMode: 'off',           // 'off' | 'all' | 'one'
@@ -94,6 +99,8 @@ import { renderTrackCard } from './ui/renderers.js';
             state.favorites = JSON.parse(localStorage.getItem(STORAGE_KEYS.FAVORITES) || '[]');
             state.playlists = JSON.parse(localStorage.getItem(STORAGE_KEYS.PLAYLISTS) || '[]');
             state.history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) || '[]');
+            state.queue = JSON.parse(localStorage.getItem(STORAGE_KEYS.QUEUE) || '[]');
+            state.priorityQueue = JSON.parse(localStorage.getItem(STORAGE_KEYS.PRIORITY_QUEUE) || '[]');
           } catch (err) {
             console.warn('Falha ao carregar dados locais:', err);
           }
@@ -120,6 +127,13 @@ import { renderTrackCard } from './ui/renderers.js';
         saveHistory() {
           try {
             localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(state.history.slice(0, 60)));
+          } catch (e) {}
+        },
+
+        saveQueue() {
+          try {
+            localStorage.setItem(STORAGE_KEYS.QUEUE, JSON.stringify(state.queue));
+            localStorage.setItem(STORAGE_KEYS.PRIORITY_QUEUE, JSON.stringify(state.priorityQueue));
           } catch (e) {}
         },
 
@@ -402,7 +416,7 @@ import { renderTrackCard } from './ui/renderers.js';
               audio.currentTime = 0;
               audio.play().catch(() => {});
             } else {
-              this.nextTrack(true);
+              this.handleNextTrack(true);
             }
           });
 
@@ -414,15 +428,17 @@ import { renderTrackCard } from './ui/renderers.js';
           if (!track) return;
 
           if (Array.isArray(queueList) && queueList.length > 0) {
-            state.queue = [...queueList];
+            state.queue = [...queueList].filter((t, index, list) => (
+              t.trackId !== track.trackId
+              && list.findIndex(item => item.trackId === t.trackId) === index
+            ));
           }
-          const idx = state.queue.findIndex(t => t.trackId === track.trackId);
-          if (idx !== -1) {
-            state.queueIndex = idx;
-          } else {
-            state.queue.unshift(track);
-            state.queueIndex = 0;
+          if (state.currentTrack && state.currentTrack.trackId !== track.trackId) {
+            const previous = Storage.sanitizeTrackMetadata(state.currentTrack);
+            state.history = [previous, ...state.history.filter(t => t.trackId !== previous.trackId)].slice(0, 60);
+            Storage.saveHistory();
           }
+          state.queueIndex = state.queue.findIndex(t => t.trackId === track.trackId);
 
           state.currentTrack = track;
           state.activeLyricIndex = -1;
@@ -431,9 +447,6 @@ import { renderTrackCard } from './ui/renderers.js';
           UI.renderNowPlaying(track);
           ThemeEngine.setAmbientArtwork(track.artworkLarge);
           this.updateMediaSessionMetadata(track);
-
-          // Salva apenas metadados no histórico local
-          this.recordHistory(track);
 
           // Carrega letras sincronizadas em paralelo
           LyricsController.loadForTrack(track);
@@ -478,6 +491,121 @@ import { renderTrackCard } from './ui/renderers.js';
           this.startStream(proxyStreamUrl, 'proxy');
         },
 
+        playNow(track, contextList = []) {
+          if (!track) return;
+          const trackId = track.trackId || track.id || track.videoId;
+          if (!trackId) return;
+
+          state.priorityQueue = state.priorityQueue.filter(t => (t.trackId || t.id || t.videoId) !== trackId);
+          state.queue = state.queue.filter(t => (t.trackId || t.id || t.videoId) !== trackId);
+          Storage.saveQueue();
+
+          const context = Array.isArray(contextList)
+            ? contextList.filter((t, index, list) => {
+              const id = t.trackId || t.id || t.videoId;
+              return id && id !== trackId
+                && list.findIndex(item => (item.trackId || item.id || item.videoId) === id) === index;
+            })
+            : [];
+          void this.playTrack(track, context.length > 0 ? context : null);
+        },
+
+        playNext(track) {
+          if (!track) return;
+          const clean = Storage.sanitizeTrackMetadata(track);
+          state.priorityQueue = [
+            clean,
+            ...state.priorityQueue.filter(t => t.trackId !== clean.trackId)
+          ];
+          state.queue = state.queue.filter(t => t.trackId !== clean.trackId);
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Tocar a seguir', 'success');
+        },
+
+        addToQueue(track) {
+          if (!track) return;
+          const clean = Storage.sanitizeTrackMetadata(track);
+          if (clean.trackId === state.currentTrack?.trackId) return;
+          state.queue = [...state.queue.filter(t => t.trackId !== clean.trackId), clean];
+          state.priorityQueue = state.priorityQueue.filter(t => t.trackId !== clean.trackId);
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Adicionada à fila', 'success');
+        },
+
+        handleNextTrack(autoAdvance = false) {
+          let nextTrack = null;
+          if (state.priorityQueue.length > 0) {
+            nextTrack = state.priorityQueue.shift();
+          } else if (state.queue.length > 0) {
+            nextTrack = state.queue.shift();
+          }
+
+          if (nextTrack) {
+            Storage.saveQueue();
+            this.playTrack(nextTrack);
+            return;
+          }
+
+          if (state.repeatMode === 'all' || (!autoAdvance && state.queue.length === 0)) {
+            if (state.queueIndex >= 0 && state.displayedTracks?.length > 0) {
+              this.playTrack(state.displayedTracks[0], state.displayedTracks);
+            }
+          }
+        },
+
+        handlePreviousTrack() {
+          if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+            return;
+          }
+          const previous = state.history.find(track => track.trackId !== state.currentTrack?.trackId);
+          if (!previous) return;
+          state.history = state.history.filter(track => track.trackId !== previous.trackId);
+          Storage.saveHistory();
+          this.playTrack(previous);
+        },
+
+        removeFromQueue(id, listType = 'queue', index = -1) {
+          const targetList = listType === 'priority' ? state.priorityQueue : state.queue;
+          if (index >= 0 && index < targetList.length) {
+            targetList.splice(index, 1);
+            Storage.saveQueue();
+            UI.renderQueueDrawer();
+            return;
+          }
+          if (listType === 'priority') {
+            state.priorityQueue = state.priorityQueue.filter(track =>
+              (track.trackId || track.id || track.videoId) !== id
+            );
+          } else {
+            state.queue = state.queue.filter(track =>
+              (track.trackId || track.id || track.videoId) !== id
+            );
+          }
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+        },
+
+        reorderQueue(fromIndex, toIndex) {
+          if (fromIndex < 0 || toIndex < 0 || fromIndex >= state.queue.length || toIndex >= state.queue.length) return;
+          const reordered = [...state.queue];
+          const [track] = reordered.splice(fromIndex, 1);
+          reordered.splice(toIndex, 0, track);
+          state.queue = reordered;
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+        },
+
+        clearQueue() {
+          state.priorityQueue = [];
+          state.queue = [];
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Fila limpa');
+        },
+
         startStream(url, sourceType) {
           state.activeStreamSource = sourceType;
           UI.updateTechnicalBadge();
@@ -512,37 +640,11 @@ import { renderTrackCard } from './ui/renderers.js';
         },
 
         nextTrack(autoAdvance = false) {
-          if (state.queue.length === 0) return;
-
-          if (state.shuffle && state.queue.length > 1) {
-            let nextIdx = state.queueIndex;
-            while (nextIdx === state.queueIndex) {
-              nextIdx = Math.floor(Math.random() * state.queue.length);
-            }
-            this.playTrack(state.queue[nextIdx]);
-            return;
-          }
-
-          const nextIdx = state.queueIndex + 1;
-          if (nextIdx < state.queue.length) {
-            this.playTrack(state.queue[nextIdx]);
-          } else if (state.repeatMode === 'all' || !autoAdvance) {
-            this.playTrack(state.queue[0]);
-          }
+          this.handleNextTrack(autoAdvance);
         },
 
         prevTrack() {
-          if (state.queue.length === 0) return;
-          if (audio.currentTime > 4) {
-            audio.currentTime = 0;
-            return;
-          }
-          const prevIdx = state.queueIndex - 1;
-          if (prevIdx >= 0) {
-            this.playTrack(state.queue[prevIdx]);
-          } else {
-            this.playTrack(state.queue[state.queue.length - 1]);
-          }
+          this.handlePreviousTrack();
         },
 
         seekToPercent(pct) {
@@ -804,6 +906,181 @@ import { renderTrackCard } from './ui/renderers.js';
           }, 3400);
         },
 
+        updateQueueBadge() {
+          const count = state.priorityQueue.length + state.queue.length;
+          ['queue-count-desktop', 'queue-count-mobile'].forEach(id => {
+            const badge = document.getElementById(id);
+            if (!badge) return;
+            badge.textContent = String(count);
+            badge.classList.toggle('hidden', count === 0);
+            badge.classList.toggle('flex', count > 0);
+          });
+        },
+
+        toggleQueueDrawer(forceOpen = null) {
+          state.isQueueOpen = typeof forceOpen === 'boolean' ? forceOpen : !state.isQueueOpen;
+          document.getElementById('queue-drawer').classList.toggle('open', state.isQueueOpen);
+          document.getElementById('queue-backdrop').classList.toggle('open', state.isQueueOpen);
+          if (state.isQueueOpen) this.renderQueueDrawer();
+        },
+
+        renderQueueDrawer() {
+          this.updateQueueBadge();
+          document.querySelectorAll('[data-queue-tab]').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.queueTab === state.queueTab);
+          });
+          const content = document.getElementById('queue-drawer-content');
+          if (!content) return;
+
+          if (state.queueTab === 'history') {
+            content.innerHTML = state.history.length
+              ? state.history.map((track, index) => `
+                  <div class="queue-track-row flex items-center gap-3 px-2 py-2 rounded-2xl hover:bg-white/[0.06] mb-1">
+                    <img src="${this.escapeHtml(track.artworkMedium)}" class="w-11 h-11 rounded-xl object-cover border border-white/10" alt="">
+                    <button data-history-play="${this.escapeHtml(track.trackId)}" class="min-w-0 flex-1 text-left">
+                      <p class="text-xs font-semibold text-white truncate">${this.escapeHtml(track.title)}</p>
+                      <p class="text-[11px] text-white/45 truncate mt-0.5">${this.escapeHtml(track.artist)}</p>
+                    </button>
+                    <button data-history-remove="${this.escapeHtml(track.trackId)}" class="p-2 rounded-lg text-white/35 hover:text-white" title="Remover do histórico">
+                      <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    </button>
+                  </div>`).join('')
+              : '<div class="text-center text-xs text-white/45 py-12">Nenhuma música no histórico.</div>';
+            lucide.createIcons({ root: content });
+            content.querySelectorAll('[data-history-play]').forEach(button => {
+              button.addEventListener('click', () => {
+                const track = state.history.find(t => t.trackId === button.dataset.historyPlay);
+                if (track) AudioEngine.playNow(track);
+              });
+            });
+            content.querySelectorAll('[data-history-remove]').forEach(button => {
+              button.addEventListener('click', () => {
+                state.history = state.history.filter(t => t.trackId !== button.dataset.historyRemove);
+                Storage.saveHistory();
+                this.renderQueueDrawer();
+              });
+            });
+            return;
+          }
+
+          const priorityHtml = state.priorityQueue.map((track, index) => this.queueRowTemplate(track, index, 'priority')).join('');
+          const queueHtml = state.queue.map((track, index) => this.queueRowTemplate(track, index, 'queue')).join('');
+          content.innerHTML = `
+            <section class="mb-4">
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">Tocando agora</p>
+              ${state.currentTrack ? this.queueRowTemplate(state.currentTrack, -1, 'current') : '<p class="px-2 text-xs text-white/45">Nenhuma faixa tocando.</p>'}
+            </section>
+            <section class="mb-4">
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300/70">A seguir</p>
+              ${priorityHtml || '<p class="px-2 text-xs text-white/45">Nada na prioridade.</p>'}
+            </section>
+            <section>
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">Próximas na fila</p>
+              ${queueHtml || '<p class="px-2 text-xs text-white/45">A fila está vazia.</p>'}
+            </section>`;
+          lucide.createIcons({ root: content });
+
+          content.querySelectorAll('[data-remove-queue]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              AudioEngine.removeFromQueue(
+                button.dataset.removeQueue,
+                button.dataset.listType,
+                Number(button.dataset.queueIndex)
+              );
+            });
+          });
+          content.querySelectorAll('[data-move-queue]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const from = Number(button.dataset.moveQueue);
+              AudioEngine.reorderQueue(from, from + Number(button.dataset.direction));
+            });
+          });
+          content.querySelectorAll('[data-queue-play]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const listType = button.dataset.listType;
+              const index = Number(button.dataset.queueIndex);
+              const list = listType === 'priority' ? state.priorityQueue : state.queue;
+              const track = list[index];
+              if (track) {
+                if (listType === 'priority' && index >= 0) {
+                  state.priorityQueue.splice(index, 1);
+                } else if (listType === 'queue' && index >= 0) {
+                  state.queue.splice(index, 1);
+                }
+                Storage.saveQueue();
+                AudioEngine.playNow(track);
+                UI.renderQueueDrawer();
+              }
+            });
+          });
+
+          let draggedIndex = null;
+          content.querySelectorAll('[data-draggable-index]').forEach(row => {
+            row.addEventListener('dragstart', () => {
+              draggedIndex = Number(row.dataset.draggableIndex);
+              row.classList.add('dragging');
+            });
+            row.addEventListener('dragend', () => row.classList.remove('dragging'));
+            row.addEventListener('dragover', event => event.preventDefault());
+            row.addEventListener('drop', event => {
+              event.preventDefault();
+              const targetIndex = Number(row.dataset.draggableIndex);
+              if (draggedIndex !== null) AudioEngine.reorderQueue(draggedIndex, targetIndex);
+            });
+          });
+        },
+
+        queueRowTemplate(track, index, listType) {
+          const trackId = track.trackId || track.id || track.videoId || '';
+          const controls = listType === 'current'
+            ? ''
+            : `<button type="button" data-queue-play="${this.escapeHtml(trackId)}" data-list-type="${listType}" data-queue-index="${index}" class="queue-action-button p-1.5 rounded-lg text-white/45 hover:text-white" title="Tocar agora"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>
+               ${listType === 'queue' ? `
+                 <button type="button" data-move-queue="${index}" data-direction="-1" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-white ${index === 0 ? 'opacity-25' : ''}" title="Subir"><i data-lucide="chevron-up" class="w-3.5 h-3.5"></i></button>
+                 <button type="button" data-move-queue="${index}" data-direction="1" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-white ${index === state.queue.length - 1 ? 'opacity-25' : ''}" title="Descer"><i data-lucide="chevron-down" class="w-3.5 h-3.5"></i></button>` : ''}
+               <button type="button" data-remove-queue="${this.escapeHtml(trackId)}" data-list-type="${listType}" data-queue-index="${index}" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-rose-400" title="Remover"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>`;
+          return `
+            <div class="queue-track-row flex items-center gap-3 px-2 py-2 rounded-2xl ${listType === 'current' ? 'bg-white/[0.08] border border-white/[0.08]' : 'hover:bg-white/[0.06]'} mb-1"
+                 ${listType === 'queue' ? `draggable="true" data-draggable-index="${index}"` : ''}>
+              <img src="${this.escapeHtml(track.artworkMedium)}" class="w-11 h-11 rounded-xl object-cover border border-white/10" alt="">
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-semibold text-white truncate">${this.escapeHtml(track.title)}</p>
+                <p class="text-[11px] text-white/45 truncate mt-0.5">${this.escapeHtml(track.artist)}</p>
+              </div>
+              <div class="queue-actions flex items-center shrink-0 relative z-[2] pointer-events-auto">${controls}</div>
+            </div>`;
+        },
+
+        openTrackOptions(track, anchor, event) {
+          event?.preventDefault?.();
+          const menu = document.getElementById('track-options-menu');
+          menu.innerHTML = `
+            <button data-track-menu-action="play-now" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="play" class="w-4 h-4"></i>Tocar agora</button>
+            <button data-track-menu-action="play-next" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="corner-down-right" class="w-4 h-4"></i>Tocar a seguir</button>
+            <button data-track-menu-action="add-queue" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="list-plus" class="w-4 h-4"></i>Adicionar à fila</button>
+            <button data-track-menu-action="add-playlist" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="library" class="w-4 h-4"></i>Adicionar à Playlist</button>`;
+          const rect = anchor?.getBoundingClientRect?.();
+          menu.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect?.left ?? event?.clientX ?? 8))}px`;
+          menu.style.top = `${Math.max(8, Math.min(window.innerHeight - 190, rect?.bottom ?? event?.clientY ?? 8))}px`;
+          menu.classList.remove('hidden');
+          lucide.createIcons({ root: menu });
+          menu.querySelectorAll('[data-track-menu-action]').forEach(button => {
+            button.onclick = () => {
+              menu.classList.add('hidden');
+              if (button.dataset.trackMenuAction === 'play-now') AudioEngine.playNow(track);
+              if (button.dataset.trackMenuAction === 'play-next') AudioEngine.playNext(track);
+              if (button.dataset.trackMenuAction === 'add-queue') AudioEngine.addToQueue(track);
+              if (button.dataset.trackMenuAction === 'add-playlist') this.openAddToPlaylistModal(track);
+            };
+          });
+        },
+
         openConfirm(title, description) {
           return new Promise(resolve => {
             const modal = document.getElementById('confirm-modal');
@@ -894,7 +1171,7 @@ import { renderTrackCard } from './ui/renderers.js';
           try {
             const tracks = await ApiService.searchTracks(query, 25);
             state.displayedTracks = tracks;
-            this.renderTracksGrid(tracks);
+            this.renderTracksGrid(tracks, { context: 'search' });
 
             // Define capa inicial de iluminação ambiente na primeira carga
             if (!state.currentTrack && tracks.length > 0) {
@@ -947,9 +1224,14 @@ import { renderTrackCard } from './ui/renderers.js';
                       <button data-action="fav" data-idx="${idx}" class="w-9 h-9 rounded-xl bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center text-white hover:scale-105 transition" title="Favoritar">
                         <i data-lucide="heart" class="w-4 h-4 ${isFav ? 'fill-rose-500 text-rose-500' : ''}"></i>
                       </button>
-                      <button data-action="play" data-idx="${idx}" class="accent-btn w-10 h-10 rounded-xl flex items-center justify-center" title="Tocar agora">
-                        <i data-lucide="${isPlayingThis && state.isPlaying ? 'pause' : 'play'}" class="w-4 h-4 fill-current ${isPlayingThis && state.isPlaying ? '' : 'ml-0.5'}"></i>
-                      </button>
+                      <div class="flex items-center gap-1.5">
+                        <button data-action="play-next" data-idx="${idx}" class="w-9 h-9 rounded-xl bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center text-white hover:scale-105 transition" title="Tocar a seguir">
+                          <i data-lucide="corner-down-right" class="w-4 h-4"></i>
+                        </button>
+                        <button data-action="play" data-idx="${idx}" class="accent-btn w-10 h-10 rounded-xl flex items-center justify-center" title="Tocar agora">
+                          <i data-lucide="${isPlayingThis && state.isPlaying ? 'pause' : 'play'}" class="w-4 h-4 fill-current ${isPlayingThis && state.isPlaying ? '' : 'ml-0.5'}"></i>
+                        </button>
+                      </div>
                     </div>
                     <!-- Selo de Duração -->
                     <span class="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/55 backdrop-blur-md font-mono-tech text-[10px] text-white/85 border border-white/10">
@@ -974,6 +1256,9 @@ import { renderTrackCard } from './ui/renderers.js';
                     <button data-action="add-pl" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition" title="Adicionar à Playlist">
                       <i data-lucide="list-plus" class="w-3.5 h-3.5"></i>
                     </button>
+                    <button data-action="menu" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition" title="Mais opções">
+                      <i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>
+                    </button>
                   </div>
                 </div>
               </article>
@@ -997,17 +1282,36 @@ import { renderTrackCard } from './ui/renderers.js';
                   this.toggleFavorite(track);
                 } else if (action === 'add-pl') {
                   this.openAddToPlaylistModal(track);
+                } else if (action === 'play-next') {
+                  AudioEngine.playNext(track);
+                } else if (action === 'menu') {
+                  this.openTrackOptions(track, actionBtn, e);
                 } else if (action === 'play') {
                   if (state.currentTrack?.trackId === track.trackId) {
                     AudioEngine.togglePlayPause();
                   } else {
-                    AudioEngine.playTrack(track, tracks);
+                    if (options.context === 'favorites' || options.context === 'playlist') {
+                      AudioEngine.playNow(track, tracks);
+                    } else {
+                      AudioEngine.playNow(track);
+                    }
                   }
                 }
                 return;
               }
 
-              AudioEngine.playTrack(track, tracks);
+              if (options.context === 'favorites' || options.context === 'playlist') {
+                AudioEngine.playNow(track, tracks);
+              } else {
+                AudioEngine.playNow(track);
+              }
+            });
+
+            card.addEventListener('contextmenu', (event) => {
+              event.preventDefault();
+              const idx = parseInt(card.getAttribute('data-track-idx'), 10);
+              const track = tracks[idx];
+              if (track) this.openTrackOptions(track, card, event);
             });
           });
         },
@@ -1045,7 +1349,7 @@ import { renderTrackCard } from './ui/renderers.js';
             if (state.displayedTracks.length === 0) {
               this.loadExploreTracks(state.activeChipQuery, 'Em Alta Agora');
             } else {
-              this.renderTracksGrid(state.displayedTracks);
+              this.renderTracksGrid(state.displayedTracks, { context: 'search' });
             }
             return;
           }
@@ -1060,11 +1364,12 @@ import { renderTrackCard } from './ui/renderers.js';
               </button>`;
               lucide.createIcons({ root: actionsEl });
               document.getElementById('btn-play-all-favs').addEventListener('click', () => {
-                AudioEngine.playTrack(state.favorites[0], state.favorites);
+                AudioEngine.playNow(state.favorites[0], state.favorites);
               });
             }
             state.displayedTracks = state.favorites;
             this.renderTracksGrid(state.favorites, {
+              context: 'favorites',
               emptyTitle: 'Nenhum favorito ainda',
               emptyDesc: 'Toque no ícone de coração em qualquer música para salvá-la aqui.'
             });
@@ -1092,6 +1397,7 @@ import { renderTrackCard } from './ui/renderers.js';
             }
             state.displayedTracks = state.history;
             this.renderTracksGrid(state.history, {
+              context: 'history',
               emptyTitle: 'Histórico vazio',
               emptyDesc: 'As músicas que você reproduzir aparecerão automaticamente aqui.'
             });
@@ -1129,7 +1435,7 @@ import { renderTrackCard } from './ui/renderers.js';
             lucide.createIcons({ root: actionsEl });
 
             document.getElementById('btn-play-pl')?.addEventListener('click', () => {
-              AudioEngine.playTrack(pl.tracks[0], pl.tracks);
+              AudioEngine.playNow(pl.tracks[0], pl.tracks);
             });
             document.getElementById('btn-delete-pl')?.addEventListener('click', async () => {
               const ok = await this.openConfirm('Excluir Playlist', `Tem certeza que deseja excluir "${pl.name}"?`);
@@ -1144,6 +1450,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
             state.displayedTracks = pl.tracks;
             this.renderTracksGrid(pl.tracks, {
+              context: 'playlist',
               emptyTitle: 'Esta playlist está vazia',
               emptyDesc: 'Clique no ícone de lista (+) em qualquer música para adicioná-la aqui.'
             });
@@ -1459,6 +1766,22 @@ import { renderTrackCard } from './ui/renderers.js';
         document.getElementById('btn-desktop-prev').addEventListener('click', () => AudioEngine.prevTrack());
         document.getElementById('btn-desktop-fav').addEventListener('click', () => UI.toggleFavorite(state.currentTrack));
         document.getElementById('btn-desktop-add-pl').addEventListener('click', () => UI.openAddToPlaylistModal(state.currentTrack));
+        document.getElementById('btn-desktop-queue')?.addEventListener('click', () => UI.toggleQueueDrawer());
+        document.getElementById('btn-mobile-mini-queue')?.addEventListener('click', () => UI.toggleQueueDrawer());
+        document.getElementById('btn-close-queue')?.addEventListener('click', () => UI.toggleQueueDrawer(false));
+        document.getElementById('queue-backdrop')?.addEventListener('click', () => UI.toggleQueueDrawer(false));
+        document.getElementById('btn-clear-queue')?.addEventListener('click', () => AudioEngine.clearQueue());
+        document.querySelectorAll('[data-queue-tab]').forEach(tab => {
+          tab.addEventListener('click', () => {
+            state.queueTab = tab.dataset.queueTab;
+            UI.renderQueueDrawer();
+          });
+        });
+        document.addEventListener('click', (event) => {
+          if (!event.target.closest('#track-options-menu') && !event.target.closest('[data-action="menu"]')) {
+            document.getElementById('track-options-menu')?.classList.add('hidden');
+          }
+        });
 
         document.getElementById('desktop-progress').addEventListener('input', (e) => {
           AudioEngine.seekToPercent(parseFloat(e.target.value));
@@ -1679,6 +2002,7 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.renderGenreChips();
         UI.renderSidebarPlaylists();
         UI.updateFavoritesBadge();
+        UI.updateQueueBadge();
         UI.updateTechnicalBadge();
 
         AudioEngine.init();

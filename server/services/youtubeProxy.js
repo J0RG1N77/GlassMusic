@@ -36,6 +36,7 @@ async function extractDirectAudioUrl(videoUrl) {
 
   const executable = await findYtDlpExecutable();
   const args = [
+    '-4',
     '--no-playlist',
     '--no-warnings',
     '--quiet',
@@ -139,6 +140,11 @@ export async function pipeAudioStream(req, res, query) {
     upstream = await fetch(refreshed.url, { headers });
   }
   if (!upstream.ok && upstream.status !== 206) {
+    directUrlCache.delete(cacheKey({
+      artist: query.artist,
+      title: query.title,
+      duration: query.duration
+    }));
     throw new Error(`YouTube respondeu ${upstream.status}`);
   }
 

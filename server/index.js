@@ -1,10 +1,13 @@
 import 'dotenv/config';
+import dns from 'node:dns';
 import cors from 'cors';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeAudioStream } from './services/youtubeProxy.js';
+
+dns.setDefaultResultOrder('ipv4first');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
