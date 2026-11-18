@@ -1,7 +1,7 @@
 {
   "name": "glass-music",
-  "version": "1.0.0",
-  "description": "Glass Music desktop and web audio player",
+  "version": "1.1.0",
+  "description": "Glass Music audio player",
   "private": true,
   "type": "module",
   "main": "desktop/main.js",
