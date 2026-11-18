@@ -236,6 +236,7 @@
        BARRA DE REPRODUÇÃO COMPLETA NO RODAPÉ (DESKTOP >= 768px)
        ======================================================================== -->
   <footer id="desktop-player-bar" class="hidden md:flex fixed bottom-3 left-4 right-4 z-30 glass-panel-elevated rounded-3xl px-5 py-3 items-center justify-between gap-4">
+    <canvas id="audio-spectrum" class="pointer-events-none absolute left-[30%] right-[30%] bottom-0 h-8 opacity-0 transition-opacity" aria-hidden="true"></canvas>
     <!-- Esquerda: Capa, Metadados, Favorito & Selo Técnico -->
     <div class="flex items-center gap-3.5 w-[30%] min-w-0">
       <div class="relative w-14 h-14 rounded-2xl overflow-hidden shrink-0 bg-white/5 border border-white/15 shadow-lg group">
@@ -518,6 +519,7 @@
               <span>Livre</span>
               <input id="input-accent-picker" type="color" value="#38bdf8" class="w-5 h-5 rounded cursor-pointer bg-transparent border-0 p-0" />
             </label>
+            <button id="btn-accent-auto" type="button" class="glass-chip px-3 py-1.5 rounded-xl text-xs text-white/80">Auto</button>
           </div>
         </div>
 
@@ -549,6 +551,31 @@
           <button id="toggle-oled-mode" type="button" role="switch" aria-checked="false"
                   class="w-12 h-7 rounded-full bg-white/15 p-1 transition-colors relative shrink-0">
             <span id="toggle-oled-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-0"></span>
+          </button>
+        </div>
+
+        <!-- 4. Atmosfera de Fundo -->
+        <div class="glass-panel rounded-2xl p-3.5 space-y-3">
+          <div>
+            <h4 class="text-sm font-semibold text-white">Atmosfera de Fundo</h4>
+            <p id="atmosphere-status" class="text-[11px] text-white/55 mt-0.5">Ativa enquanto o modo OLED estiver desligado</p>
+          </div>
+          <div id="atmosphere-options" class="grid grid-cols-3 gap-1.5">
+            <button type="button" data-atmosphere="soft" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Brilho Suave</button>
+            <button type="button" data-atmosphere="immersive" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Capa Imersiva</button>
+            <button type="button" data-atmosphere="aurora" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Aurora Viva</button>
+          </div>
+        </div>
+
+        <!-- 5. Visualizador de Frequências -->
+        <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between gap-3">
+          <div>
+            <h4 class="text-sm font-semibold text-white">Visualizador de Frequências</h4>
+            <p class="text-[11px] text-white/55 mt-0.5">Barras translúcidas na barra inferior do player</p>
+          </div>
+          <button id="toggle-frequency-visualizer" type="button" role="switch" aria-checked="false"
+                  class="w-12 h-7 rounded-full bg-white/15 p-1 transition-colors relative shrink-0">
+            <span id="toggle-frequency-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-0"></span>
           </button>
         </div>
 

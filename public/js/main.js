@@ -30,6 +30,9 @@ import { renderTrackCard } from './ui/renderers.js';
         glassAlpha: 0.44,
         glassBlur: 24,
         oledMode: false,
+        accentMode: 'manual',
+        atmosphereMode: 'soft',
+        frequencyVisualizer: false,
         backendUrl: DEFAULT_BACKEND_URL
       };
 
@@ -79,7 +82,11 @@ import { renderTrackCard } from './ui/renderers.js';
         fullscreenOpen: false,
         fullscreenTab: 'cover',      // 'cover' | 'lyrics'
         pendingTrackForPlaylist: null,
-        activeAmbientSlot: 'a'
+        activeAmbientSlot: 'a',
+        audioContext: null,
+        audioAnalyser: null,
+        audioSource: null,
+        audioAnimationFrame: null
       };
 
       /* ======================================================================
@@ -169,7 +176,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
         applyAll() {
           const root = document.documentElement;
-          const { accentColor, glassAlpha, glassBlur, oledMode } = state.settings;
+          const { accentColor, glassAlpha, glassBlur, oledMode, accentMode, atmosphereMode, frequencyVisualizer } = state.settings;
 
           root.style.setProperty('--accent-color', accentColor);
           root.style.setProperty('--accent-rgb', this.hexToRgb(accentColor));
@@ -183,6 +190,8 @@ import { renderTrackCard } from './ui/renderers.js';
           } else {
             backdrop.classList.remove('oled-hidden');
           }
+          backdrop.classList.toggle('atmosphere-immersive', !oledMode && atmosphereMode === 'immersive');
+          backdrop.classList.toggle('atmosphere-aurora', !oledMode && atmosphereMode === 'aurora');
 
           // Atualiza visual dos controles do painel de personalização
           const alphaPct = Math.round(glassAlpha * 100);
@@ -214,6 +223,32 @@ import { renderTrackCard } from './ui/renderers.js';
             toggleKnob.style.transform = 'translateX(0px)';
           }
 
+          document.querySelectorAll('[data-atmosphere]').forEach(button => {
+            const active = button.dataset.atmosphere === atmosphereMode;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+            button.disabled = oledMode;
+          });
+          document.getElementById('atmosphere-options')?.toggleAttribute('disabled', oledMode);
+          document.getElementById('atmosphere-options')?.classList.toggle('opacity-40', oledMode);
+          document.getElementById('atmosphere-status').textContent = oledMode
+            ? 'Ativa apenas com o modo OLED desligado'
+            : 'Ativa enquanto o modo OLED estiver desligado';
+
+          const autoBtn = document.getElementById('btn-accent-auto');
+          if (autoBtn) {
+            autoBtn.classList.toggle('active', accentMode === 'auto');
+            autoBtn.setAttribute('aria-pressed', String(accentMode === 'auto'));
+          }
+
+          const visualizerBtn = document.getElementById('toggle-frequency-visualizer');
+          const visualizerKnob = document.getElementById('toggle-frequency-knob');
+          if (visualizerBtn) {
+            visualizerBtn.setAttribute('aria-checked', String(frequencyVisualizer));
+            visualizerBtn.style.backgroundColor = frequencyVisualizer ? accentColor : 'rgba(255,255,255,0.16)';
+            visualizerKnob.style.transform = frequencyVisualizer ? 'translateX(20px)' : 'translateX(0px)';
+          }
+
           // Atualiza preenchimento dos sliders de progresso e volume
           this.updateSliderFill(document.getElementById('desktop-progress'));
           this.updateSliderFill(document.getElementById('desktop-volume'));
@@ -232,6 +267,9 @@ import { renderTrackCard } from './ui/renderers.js';
         // Crossfade suave da capa 1000x1000 desfocada no plano de fundo
         setAmbientArtwork(url) {
           if (!url) return;
+          if (state.settings.accentMode === 'auto') {
+            this.extractDominantAccent(url);
+          }
           const imgA = document.getElementById('ambient-img-a');
           const imgB = document.getElementById('ambient-img-b');
 
@@ -254,6 +292,110 @@ import { renderTrackCard } from './ui/renderers.js';
               state.activeAmbientSlot = 'a';
             };
           }
+        },
+
+        async extractDominantAccent(url) {
+          try {
+            const image = new Image();
+            image.crossOrigin = 'anonymous';
+            image.src = url;
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            context.drawImage(image, 0, 0, 64, 64);
+            const pixels = context.getImageData(0, 0, 64, 64).data;
+            const colors = new Map();
+            for (let i = 0; i < pixels.length; i += 16) {
+              const r = pixels[i];
+              const g = pixels[i + 1];
+              const b = pixels[i + 2];
+              const max = Math.max(r, g, b);
+              const min = Math.min(r, g, b);
+              const saturation = max === 0 ? 0 : (max - min) / max;
+              const brightness = (r + g + b) / 765;
+              if (max < 35 || brightness > 0.92 || saturation < 0.18) continue;
+              const key = `${r >> 4},${g >> 4},${b >> 4}`;
+              const score = saturation * 3 + (1 - Math.abs(brightness - 0.48));
+              const entry = colors.get(key) || { r: 0, g: 0, b: 0, count: 0, score: 0 };
+              entry.r += r;
+              entry.g += g;
+              entry.b += b;
+              entry.count += 1;
+              entry.score += score;
+              colors.set(key, entry);
+            }
+            let best = null;
+            colors.forEach((entry) => {
+              if (!best || entry.score > best.score) best = entry;
+            });
+            if (!best) return;
+            if (!best.count) return;
+            const rq = best.r / best.count;
+            const gq = best.g / best.count;
+            const bq = best.b / best.count;
+            const hex = `#${Math.max(0, Math.min(255, Math.round(rq))).toString(16).padStart(2, '0')}${Math.max(0, Math.min(255, Math.round(gq))).toString(16).padStart(2, '0')}${Math.max(0, Math.min(255, Math.round(bq))).toString(16).padStart(2, '0')}`;
+            if (state.settings.accentMode === 'auto') {
+              state.settings.accentColor = hex;
+              Storage.saveSettings();
+              this.applyAll();
+            }
+          } catch (error) {
+            console.warn('Não foi possível extrair a cor da capa:', error.message);
+          }
+        },
+
+        initAudioVisualizer() {
+          if (!state.settings.frequencyVisualizer) {
+            const canvas = document.getElementById('audio-spectrum');
+            if (canvas) canvas.classList.add('opacity-0');
+            if (state.audioAnimationFrame) cancelAnimationFrame(state.audioAnimationFrame);
+            return;
+          }
+          if (!state.audioContext) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            state.audioContext = new AudioContext();
+            state.audioAnalyser = state.audioContext.createAnalyser();
+            state.audioAnalyser.fftSize = 64;
+            state.audioAnalyser.smoothingTimeConstant = 0.82;
+            state.audioSource = state.audioContext.createMediaElementSource(audio);
+            state.audioSource.connect(state.audioAnalyser);
+            state.audioAnalyser.connect(state.audioContext.destination);
+          }
+          if (state.audioContext.state === 'suspended') state.audioContext.resume();
+          const canvas = document.getElementById('audio-spectrum');
+          if (canvas) canvas.classList.remove('opacity-0');
+          this.drawAudioVisualizer();
+        },
+
+        drawAudioVisualizer() {
+          if (!state.settings.frequencyVisualizer || !state.audioAnalyser) return;
+          const canvas = document.getElementById('audio-spectrum');
+          if (!canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const ratio = window.devicePixelRatio || 1;
+          if (canvas.width !== Math.round(rect.width * ratio) || canvas.height !== Math.round(rect.height * ratio)) {
+            canvas.width = Math.round(rect.width * ratio);
+            canvas.height = Math.round(rect.height * ratio);
+          }
+          const context = canvas.getContext('2d');
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          const data = new Uint8Array(state.audioAnalyser.frequencyBinCount);
+          state.audioAnalyser.getByteFrequencyData(data);
+          const barCount = 38;
+          const gap = 2 * ratio;
+          const barWidth = Math.max(1, (canvas.width - gap * (barCount - 1)) / barCount);
+          context.fillStyle = state.settings.accentColor;
+          for (let i = 0; i < barCount; i++) {
+            const value = data[Math.floor(i * data.length / barCount)] / 255;
+            const height = Math.max(2 * ratio, value * canvas.height * 0.85);
+            const x = i * (barWidth + gap);
+            context.globalAlpha = 0.28 + value * 0.42;
+            context.fillRect(x, canvas.height - height, barWidth, height);
+          }
+          state.audioAnimationFrame = requestAnimationFrame(() => this.drawAudioVisualizer());
         }
       };
 
@@ -389,6 +531,7 @@ import { renderTrackCard } from './ui/renderers.js';
       const AudioEngine = {
         init() {
           audio.volume = 0.85;
+          ThemeEngine.initAudioVisualizer();
 
           audio.addEventListener('play', () => {
             state.isPlaying = true;
@@ -1137,6 +1280,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
           container.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
+              state.settings.accentMode = 'manual';
               state.settings.accentColor = btn.getAttribute('data-hex');
               Storage.saveSettings();
               ThemeEngine.applyAll();
@@ -1889,6 +2033,7 @@ import { renderTrackCard } from './ui/renderers.js';
         document.getElementById('btn-done-customizer').addEventListener('click', closeCustomizer);
 
         document.getElementById('input-accent-picker').addEventListener('input', (e) => {
+          state.settings.accentMode = 'manual';
           state.settings.accentColor = e.target.value;
           Storage.saveSettings();
           ThemeEngine.applyAll();
@@ -1913,6 +2058,33 @@ import { renderTrackCard } from './ui/renderers.js';
           ThemeEngine.applyAll();
         });
 
+        document.getElementById('btn-accent-auto')?.addEventListener('click', () => {
+          state.settings.accentMode = 'auto';
+          Storage.saveSettings();
+          if (state.currentTrack?.artworkLarge) {
+            ThemeEngine.extractDominantAccent(state.currentTrack.artworkLarge);
+          }
+          ThemeEngine.applyAll();
+          UI.renderAccentPresets();
+        });
+
+        document.querySelectorAll('[data-atmosphere]').forEach(button => {
+          button.addEventListener('click', () => {
+            if (state.settings.oledMode) return;
+            state.settings.atmosphereMode = button.dataset.atmosphere;
+            Storage.saveSettings();
+            ThemeEngine.applyAll();
+            if (state.currentTrack?.artworkLarge) ThemeEngine.setAmbientArtwork(state.currentTrack.artworkLarge);
+          });
+        });
+
+        document.getElementById('toggle-frequency-visualizer')?.addEventListener('click', () => {
+          state.settings.frequencyVisualizer = !state.settings.frequencyVisualizer;
+          Storage.saveSettings();
+          ThemeEngine.applyAll();
+          ThemeEngine.initAudioVisualizer();
+        });
+
         document.getElementById('btn-test-backend').addEventListener('click', async () => {
           const url = document.getElementById('input-backend-url').value.trim() || DEFAULT_SETTINGS.backendUrl;
           state.settings.backendUrl = url;
@@ -1929,6 +2101,7 @@ import { renderTrackCard } from './ui/renderers.js';
           Storage.saveSettings();
           ThemeEngine.applyAll();
           UI.renderAccentPresets();
+          ThemeEngine.initAudioVisualizer();
           UI.showToast('Estética do vidro restaurada para o padrão.');
         });
 
