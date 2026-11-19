@@ -46,13 +46,13 @@ import { renderTrackCard } from './ui/renderers.js';
       ];
 
       const DISCOVERY_CHIPS = [
-        { label: 'Em Alta Brasil', query: 'Top Hits Brasil' },
-        { label: 'Pop Internacional', query: 'The Weeknd Dua Lipa' },
-        { label: 'Lo-Fi & Chill', query: 'Lofi Beats Chill' },
-        { label: 'MPB & Bossa', query: 'Djavan Tim Maia MPB' },
-        { label: 'Eletrônica', query: 'Daft Punk Fred Again' },
-        { label: 'Rock Clássico', query: 'Coldplay Arctic Monkeys' },
-        { label: 'R&B / Soul', query: 'Frank Ocean SZA' }
+        { label: 'Em Alta Brasil', query: 'Top Hits Brasil', category: 'em-alta-brasil' },
+        { label: 'Pop Internacional', query: 'The Weeknd Dua Lipa', category: 'pop-internacional' },
+        { label: 'Lo-Fi & Chill', query: 'Lofi Beats Chill', category: 'lofi-chill' },
+        { label: 'Sertanejo', query: 'Sertanejo', category: 'sertanejo' },
+        { label: 'Eletrônica', query: 'Daft Punk Fred Again', category: 'eletronica' },
+        { label: 'Rock Clássico', query: 'Coldplay Arctic Monkeys', category: 'rock-classico' },
+        { label: 'R&B / Soul', query: 'Frank Ocean SZA', category: 'rb-soul' }
       ];
 
       const state = {
@@ -63,6 +63,7 @@ import { renderTrackCard } from './ui/renderers.js';
         currentView: 'explore',      // 'explore' | 'favorites' | 'history' | 'playlists' | 'playlist-detail'
         activePlaylistId: null,
         activeChipQuery: DISCOVERY_CHIPS[0].query,
+        activeDiscoveryCategory: DISCOVERY_CHIPS[0].category,
         displayedTracks: [],
         queue: [],
         priorityQueue: [],
@@ -296,9 +297,15 @@ import { renderTrackCard } from './ui/renderers.js';
 
         async extractDominantAccent(url) {
           try {
+            if (!url) throw new Error('Capa indisponível');
+            let imageUrl = url;
+            if (/^https?:\/\//i.test(url)) {
+              const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+              imageUrl = `${baseUrl}/api/image-proxy?url=${encodeURIComponent(url)}`;
+            }
             const image = new Image();
             image.crossOrigin = 'anonymous';
-            image.src = url;
+            image.src = imageUrl;
             await image.decode();
             const canvas = document.createElement('canvas');
             canvas.width = 64;
@@ -343,6 +350,11 @@ import { renderTrackCard } from './ui/renderers.js';
             }
           } catch (error) {
             console.warn('Não foi possível extrair a cor da capa:', error.message);
+            if (state.settings.accentMode === 'auto') {
+              state.settings.accentColor = DEFAULT_SETTINGS.accentColor;
+              Storage.saveSettings();
+              this.applyAll();
+            }
           }
         },
 
@@ -403,6 +415,30 @@ import { renderTrackCard } from './ui/renderers.js';
          4. SERVIÇOS DE API: ITUNES SEARCH, LRCLIB & PROXY NODE.JS
          ====================================================================== */
       const ApiService = {
+        async discoverTracks(category) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          try {
+            const response = await fetch(`${baseUrl}/api/discover?category=${encodeURIComponent(category)}`, {
+              cache: 'no-store'
+            });
+            if (!response.ok) throw new Error('Erro ao consultar catálogo dinâmico');
+            const data = await response.json();
+            if (Array.isArray(data.tracks) && data.tracks.length > 0) return data.tracks;
+          } catch (error) {
+            console.warn('Catálogo dinâmico indisponível:', error.message);
+          }
+          const fallbackQueries = {
+            'em-alta-brasil': 'Top Hits Brasil',
+            'pop-internacional': 'The Weeknd Dua Lipa',
+            'lofi-chill': 'Lofi Beats Chill',
+            'sertanejo': 'Sertanejo',
+            'eletronica': 'Daft Punk Fred Again',
+            'rock-classico': 'Coldplay Arctic Monkeys',
+            'rb-soul': 'Frank Ocean SZA'
+          };
+          return this.searchTracks(fallbackQueries[category] || 'Top Hits', 25);
+        },
+
         // Busca metadados oficiais no iTunes Search API (sem necessidade de chave)
         async searchTracks(query, limit = 25) {
           const url = `https://itunes.apple.com/search?media=music&entity=song&country=BR&limit=${limit}&term=${encodeURIComponent(query)}`;
@@ -1250,8 +1286,8 @@ import { renderTrackCard } from './ui/renderers.js';
         renderGenreChips() {
           const container = document.getElementById('genre-chips-bar');
           container.innerHTML = DISCOVERY_CHIPS.map(chip => {
-            const active = state.currentView === 'explore' && state.activeChipQuery === chip.query ? 'active' : '';
-            return `<button data-query="${this.escapeHtml(chip.query)}" class="glass-chip ${active} px-3.5 py-1.5 rounded-full text-xs font-medium text-white/80 whitespace-nowrap shrink-0">
+            const active = state.currentView === 'explore' && state.activeDiscoveryCategory === chip.category ? 'active' : '';
+            return `<button data-query="${this.escapeHtml(chip.query)}" data-category="${this.escapeHtml(chip.category)}" class="glass-chip ${active} px-3.5 py-1.5 rounded-full text-xs font-medium text-white/80 whitespace-nowrap shrink-0">
               ${this.escapeHtml(chip.label)}
             </button>`;
           }).join('');
@@ -1259,11 +1295,13 @@ import { renderTrackCard } from './ui/renderers.js';
           container.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
               const q = btn.getAttribute('data-query');
+              const category = btn.getAttribute('data-category');
               state.activeChipQuery = q;
+              state.activeDiscoveryCategory = category;
               document.getElementById('search-input').value = '';
               document.getElementById('btn-clear-search').classList.add('hidden');
               this.switchView('explore');
-              this.loadExploreTracks(q, btn.textContent.trim());
+              this.loadExploreTracks(q, btn.textContent.trim(), category);
             });
           });
         },
@@ -1305,7 +1343,7 @@ import { renderTrackCard } from './ui/renderers.js';
           `).join('');
         },
 
-        async loadExploreTracks(query, labelTitle = null) {
+        async loadExploreTracks(query, labelTitle = null, category = null) {
           this.renderGenreChips();
           this.showLoadingSkeletons(10);
           document.getElementById('section-title').textContent = labelTitle || `Resultados para "${query}"`;
@@ -1313,7 +1351,9 @@ import { renderTrackCard } from './ui/renderers.js';
           document.getElementById('section-actions').innerHTML = '';
 
           try {
-            const tracks = await ApiService.searchTracks(query, 25);
+            const tracks = category
+              ? await ApiService.discoverTracks(category)
+              : await ApiService.searchTracks(query, 25);
             state.displayedTracks = tracks;
             this.renderTracksGrid(tracks, { context: 'search' });
 
@@ -1491,7 +1531,11 @@ import { renderTrackCard } from './ui/renderers.js';
 
           if (state.currentView === 'explore') {
             if (state.displayedTracks.length === 0) {
-              this.loadExploreTracks(state.activeChipQuery, 'Em Alta Agora');
+              this.loadExploreTracks(
+                state.activeChipQuery,
+                'Em Alta Agora',
+                state.activeDiscoveryCategory
+              );
             } else {
               this.renderTracksGrid(state.displayedTracks, { context: 'search' });
             }
@@ -1886,12 +1930,14 @@ import { renderTrackCard } from './ui/renderers.js';
           searchTimer = setTimeout(() => {
             if (val.length >= 2) {
               state.activeChipQuery = '';
+              state.activeDiscoveryCategory = null;
               UI.switchView('explore');
               UI.loadExploreTracks(val, `Resultados para "${val}"`);
             } else if (val.length === 0) {
               state.activeChipQuery = DISCOVERY_CHIPS[0].query;
+              state.activeDiscoveryCategory = DISCOVERY_CHIPS[0].category;
               UI.switchView('explore');
-              UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+              UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora', DISCOVERY_CHIPS[0].category);
             }
           }, 420);
         });
@@ -1900,8 +1946,9 @@ import { renderTrackCard } from './ui/renderers.js';
           searchInput.value = '';
           clearBtn.classList.add('hidden');
           state.activeChipQuery = DISCOVERY_CHIPS[0].query;
+          state.activeDiscoveryCategory = DISCOVERY_CHIPS[0].category;
           UI.switchView('explore');
-          UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+          UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora', DISCOVERY_CHIPS[0].category);
         });
 
         // Controles de Reprodução Desktop
@@ -2185,5 +2232,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Verifica status do servidor Node.js proxy e carrega catálogo inicial
         ApiService.checkBackendHealth();
-        UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+        UI.loadExploreTracks(
+          DISCOVERY_CHIPS[0].query,
+          'Em Alta Agora',
+          DISCOVERY_CHIPS[0].category
+        );
 });
