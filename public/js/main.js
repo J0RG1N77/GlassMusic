@@ -418,6 +418,18 @@ import { renderTrackCard } from './ui/renderers.js';
          4. SERVIÇOS DE API: ITUNES SEARCH, LRCLIB & PROXY NODE.JS
          ====================================================================== */
       const ApiService = {
+        async importSpotifyPlaylist(url) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          const response = await fetch(`${baseUrl}/api/import-playlist`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.message || data.error || 'Não foi possível importar a playlist');
+          return data;
+        },
+
         async fetchAutoplay(artist, title, exclude = []) {
           const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
           const params = new URLSearchParams({
@@ -1334,6 +1346,154 @@ import { renderTrackCard } from './ui/renderers.js';
           });
         },
 
+        openImportPlaylistsModal() {
+          document.getElementById('import-playlists-modal')?.classList.remove('hidden');
+          this.renderImportedPlaylists();
+        },
+
+        closeImportPlaylistsModal() {
+          document.getElementById('import-playlists-modal')?.classList.add('hidden');
+        },
+
+        renderImportedPlaylists() {
+          const container = document.getElementById('imported-playlists-list');
+          if (!container) return;
+          if (!state.playlists.length) {
+            container.innerHTML = '<p class="text-xs text-white/45 text-center py-6">Nenhuma playlist salva ainda.</p>';
+            return;
+          }
+          container.innerHTML = state.playlists.map((playlist) => {
+            const cover = playlist.cover || playlist.tracks?.[0]?.artworkMedium || 'https://placehold.co/200x200/10131c/64748b?text=Playlist';
+            return `
+              <div class="glass-panel rounded-2xl p-3 flex items-center gap-3">
+                <img src="${this.escapeHtml(cover)}" alt="" class="w-12 h-12 rounded-xl object-cover border border-white/10 shrink-0" />
+                <button data-imported-open="${this.escapeHtml(playlist.id)}" class="min-w-0 flex-1 text-left">
+                  <p class="text-sm font-semibold text-white truncate">${this.escapeHtml(playlist.name)}</p>
+                  <p class="text-[11px] text-white/45 mt-0.5">${playlist.tracks?.length || 0} músicas</p>
+                </button>
+                <button data-imported-play="${this.escapeHtml(playlist.id)}" class="accent-btn p-2 rounded-xl" title="Tocar playlist">
+                  <i data-lucide="play" class="w-4 h-4 fill-current"></i>
+                </button>
+                <button data-imported-delete="${this.escapeHtml(playlist.id)}" class="glass-chip p-2 rounded-xl text-white/55 hover:text-rose-400" title="Excluir playlist">
+                  <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+              </div>`;
+          }).join('');
+          lucide.createIcons({ root: container });
+
+          container.querySelectorAll('[data-imported-play]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.importedPlay);
+              if (!playlist?.tracks?.length) return;
+              AudioEngine.playNow(playlist.tracks[0], playlist.tracks);
+              this.closeImportPlaylistsModal();
+              this.showToast(`Playlist "${playlist.name}" iniciada`, 'success');
+            });
+          });
+          container.querySelectorAll('[data-imported-delete]').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.importedDelete);
+              if (!playlist) return;
+              const confirmed = await this.openConfirm('Excluir Playlist', `Deseja excluir "${playlist.name}"?`);
+              if (!confirmed) return;
+              state.playlists = state.playlists.filter((item) => item.id !== playlist.id);
+              Storage.savePlaylists();
+              this.renderSidebarPlaylists();
+              this.renderImportedPlaylists();
+              this.showToast('Playlist excluída');
+            });
+          });
+          container.querySelectorAll('[data-imported-open]').forEach((button) => {
+            button.addEventListener('click', () => {
+              this.closeImportPlaylistsModal();
+              this.switchView('playlist-detail', button.dataset.importedOpen);
+            });
+          });
+        },
+
+        parseCsvText(text) {
+          const rows = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+          if (!rows.length) return [];
+          const splitCsv = (line) => {
+            const values = [];
+            let current = '';
+            let quoted = false;
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (char === '"' && line[i + 1] === '"') {
+                current += '"';
+                i++;
+              } else if (char === '"') {
+                quoted = !quoted;
+              } else if (char === ',' && !quoted) {
+                values.push(current.trim());
+                current = '';
+              } else {
+                current += char;
+              }
+            }
+            values.push(current.trim());
+            return values;
+          };
+          const first = splitCsv(rows[0]).map((value) => value.trim().toLocaleLowerCase());
+          const hasHeader = first.some((value) => ['title', 'track', 'track name', 'artist', 'album', 'duration'].includes(value));
+          const headers = hasHeader ? first : ['track', 'artist', 'album', 'duration'];
+          const start = hasHeader ? 1 : 0;
+          return rows.slice(start).map((row, index) => {
+            const values = splitCsv(row);
+            const record = {};
+            headers.forEach((header, column) => { record[header] = values[column] || ''; });
+            const title = record.title || record.track || record['track name'] || record.name;
+            const artist = record.artist || record.artists || record.artistname || '';
+            const album = record.album || record.albumname || 'Arquivo importado';
+            if (!title) return null;
+            const durationParts = String(record.duration || '3:00').split(':').map(Number);
+            const durationSec = durationParts.length === 2
+              ? Math.max(1, durationParts[0] * 60 + (durationParts[1] || 0))
+              : 180;
+            return {
+              trackId: `file-${index}-${title}-${artist}`,
+              title: title.trim(),
+              artist: (artist || 'Artista desconhecido').trim(),
+              album: album.trim(),
+              durationSec,
+              artworkMedium: 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+              artworkLarge: 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+              previewUrl: ''
+            };
+          }).filter(Boolean);
+        },
+
+        parseTxtText(text) {
+          return text.split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line, index) => {
+              const separator = line.includes(' - ') ? ' - ' : (line.includes('|') ? '|' : null);
+              let artist = 'Artista desconhecido';
+              let title = line;
+              if (separator) {
+                const parts = line.split(separator).map((value) => value.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                  artist = parts[0];
+                  title = parts.slice(1).join(' - ');
+                }
+              }
+              return {
+                trackId: `txt-${index}-${title}-${artist}`,
+                title,
+                artist,
+                album: 'Arquivo importado',
+                durationSec: 180,
+                artworkMedium: 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+                artworkLarge: 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+                previewUrl: ''
+              };
+            });
+        },
+
         openConfirm(title, description) {
           return new Promise(resolve => {
             const modal = document.getElementById('confirm-modal');
@@ -2053,6 +2213,84 @@ import { renderTrackCard } from './ui/renderers.js';
               : 'Reprodução Automática desativada',
             'success'
           );
+        });
+        document.getElementById('btn-open-import-playlists')?.addEventListener('click', () => {
+          UI.openImportPlaylistsModal();
+        });
+        document.getElementById('btn-close-import-playlists')?.addEventListener('click', () => {
+          UI.closeImportPlaylistsModal();
+        });
+        document.getElementById('btn-create-playlist-from-import')?.addEventListener('click', () => {
+          UI.closeImportPlaylistsModal();
+          UI.openCreatePlaylistModal();
+        });
+        document.getElementById('btn-import-spotify-playlist')?.addEventListener('click', async () => {
+          const input = document.getElementById('input-spotify-playlist-url');
+          const url = input.value.trim();
+          if (!url) {
+            UI.showToast('Cole o link público da playlist', 'error');
+            return;
+          }
+          const button = document.getElementById('btn-import-spotify-playlist');
+          button.disabled = true;
+          button.textContent = 'Importando...';
+          try {
+            const imported = await ApiService.importSpotifyPlaylist(url);
+            const tracks = (imported.tracks || []).map((track, index) => ({
+              trackId: track.trackId || `spotify-${index}-${track.title}-${track.artist}`,
+              title: track.title,
+              artist: track.artist,
+              album: track.album || 'Spotify',
+              durationSec: track.durationSec || 180,
+              artworkMedium: track.artworkMedium || track.cover || 'https://placehold.co/600x600/10131c/64748b?text=Spotify',
+              artworkLarge: track.artworkLarge || track.cover || 'https://placehold.co/1000x1000/10131c/64748b?text=Spotify',
+              previewUrl: track.previewUrl || ''
+            }));
+            if (!tracks.length) throw new Error('Nenhuma faixa foi encontrada');
+            const playlist = {
+              id: `pl_import_${Date.now()}`,
+              name: imported.name || 'Playlist do Spotify',
+              cover: imported.cover || tracks[0].artworkMedium,
+              source: 'spotify',
+              tracks
+            };
+            state.playlists.unshift(playlist);
+            Storage.savePlaylists();
+            UI.renderSidebarPlaylists();
+            UI.renderImportedPlaylists();
+            UI.showToast(`"${playlist.name}" importada`, 'success');
+            input.value = '';
+          } catch (error) {
+            UI.showToast(error.message, 'error');
+          } finally {
+            button.disabled = false;
+            button.textContent = 'Importar';
+          }
+        });
+        document.getElementById('input-import-playlist-file')?.addEventListener('change', async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const isCsv = file.name.toLocaleLowerCase().endsWith('.csv');
+            const tracks = isCsv ? UI.parseCsvText(text) : UI.parseTxtText(text);
+            if (!tracks.length) throw new Error('Nenhuma música encontrada no arquivo');
+            const playlist = {
+              id: `pl_file_${Date.now()}`,
+              name: file.name.replace(/\.(csv|txt)$/i, '') || 'Playlist importada',
+              cover: tracks[0].artworkMedium,
+              source: isCsv ? 'csv' : 'txt',
+              tracks
+            };
+            state.playlists.unshift(playlist);
+            Storage.savePlaylists();
+            UI.renderSidebarPlaylists();
+            UI.renderImportedPlaylists();
+            UI.showToast(`"${playlist.name}" importada`, 'success');
+            event.target.value = '';
+          } catch (error) {
+            UI.showToast(error.message, 'error');
+          }
         });
         document.addEventListener('click', (event) => {
           if (!event.target.closest('#track-options-menu') && !event.target.closest('[data-action="menu"]')) {

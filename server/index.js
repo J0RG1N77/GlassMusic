@@ -29,6 +29,7 @@ export function getYtDlpPath() {
 process.env.YTDLP_PATH = getYtDlpPath();
 
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || true }));
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.resolve(__dirname, '../public')));
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'glass-music-proxy' }));
@@ -186,6 +187,150 @@ app.get('/api/autoplay', async (req, res) => {
   } catch (error) {
     console.error('Falha em /api/autoplay:', error);
     return res.status(502).json({ error: 'autoplay_unavailable', message: error.message });
+  }
+});
+app.post('/api/import-playlist', async (req, res) => {
+  const url = String(req.body?.url || '').trim();
+  let spotifyUrl;
+  try {
+    spotifyUrl = new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'invalid_spotify_url' });
+  }
+
+  if (!['open.spotify.com', 'www.open.spotify.com'].includes(spotifyUrl.hostname)) {
+    return res.status(400).json({ error: 'spotify_url_required' });
+  }
+
+  const parts = spotifyUrl.pathname.split('/').filter(Boolean);
+  const playlistIndex = parts.findIndex((part) => part === 'playlist');
+  const playlistId = playlistIndex >= 0 ? parts[playlistIndex + 1] : parts[0];
+  if (!/^[A-Za-z0-9]+$/.test(playlistId || '')) {
+    return res.status(400).json({ error: 'invalid_playlist_id' });
+  }
+
+  try {
+    const embedResponse = await fetch(`https://open.spotify.com/embed/playlist/${playlistId}`, {
+      headers: {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36'
+      }
+    });
+    if (!embedResponse.ok) throw new Error(`Spotify retornou HTTP ${embedResponse.status}`);
+    const html = await embedResponse.text();
+    const scriptMatch = html.match(/<script[^>]+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (!scriptMatch) throw new Error('Dados da playlist não encontrados no embed');
+
+    let nextData;
+    try {
+      nextData = JSON.parse(scriptMatch[1]);
+    } catch {
+      throw new Error('JSON embutido da playlist é inválido');
+    }
+
+    const findValues = (value, keyName, matches = []) => {
+      if (!value || typeof value !== 'object') return matches;
+      if (Array.isArray(value)) {
+        value.forEach((item) => findValues(item, keyName, matches));
+        return matches;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (key.toLowerCase().includes(keyName.toLowerCase())) matches.push(child);
+        findValues(child, keyName, matches);
+      }
+      return matches;
+    };
+
+    const trackLists = findValues(nextData, 'tracklist')
+      .filter((item) => Array.isArray(item))
+      .sort((a, b) => b.length - a.length);
+    const rawTracks = trackLists[0] || [];
+    if (rawTracks.length === 0) throw new Error('Nenhuma faixa encontrada na playlist');
+
+    const normalizeDuration = (duration) => {
+      const value = Number(duration);
+      if (!Number.isFinite(value) || value <= 0) return 180;
+      if (value > 10000) return Math.round(value / 1000);
+      return Math.round(value);
+    };
+
+    let tracks = rawTracks.map((item, index) => {
+      const title = item.title || item.name || item.track?.title || item.track?.name;
+      const artists = item.artists || item.subtitle || item.track?.artists || item.track?.subtitle;
+      let artist = '';
+      if (Array.isArray(artists)) {
+        artist = artists.map((value) => value.name || value).filter(Boolean).join(', ');
+      } else {
+        artist = typeof artists === 'string' ? artists : '';
+      }
+      if (!artist && item.artist) artist = item.artist.name || item.artist;
+      if (!title) return null;
+      const durationSec = normalizeDuration(item.duration || item.durationMs || item.track?.duration);
+      const cover = item.coverArt?.sources?.[0]?.url
+        || item.album?.cover
+        || item.album?.images?.[0]?.url
+        || item.track?.album?.images?.[0]?.url
+        || '';
+      return {
+        trackId: `spotify-${item.uri?.split(':').pop() || item.id || `${artist}-${title}-${index}`}`,
+        title: String(title).trim(),
+        artist: String(artist || 'Artista desconhecido').trim(),
+        album: item.album?.name || item.albumName || 'Spotify',
+        cover,
+        artworkMedium: cover,
+        artworkLarge: cover,
+        duration: `${Math.floor(durationSec / 60)}:${String(durationSec % 60).padStart(2, '0')}`,
+        durationSec,
+        previewUrl: item.previewUrl || ''
+      };
+    }).filter(Boolean);
+
+    const seen = new Set();
+    tracks = tracks.filter((track) => {
+      const key = `${track.artist.toLocaleLowerCase()}::${track.title.toLocaleLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const coverCandidates = findValues(nextData, 'cover')
+      .map((value) => {
+        if (typeof value === 'string') return value;
+        if (value?.sources?.[0]?.url) return value.sources[0].url;
+        return null;
+      })
+      .filter(Boolean);
+    let cover = coverCandidates[0] || '';
+
+    const nameCandidates = findValues(nextData, 'name')
+      .filter((value) => typeof value === 'string' && value.trim())
+      .filter((value) => !['Spotify', 'Top tracks'].includes(value));
+    const name = nameCandidates[0] || 'Playlist importada';
+
+    const missingCovers = tracks.filter((track) => !track.cover).slice(0, 25);
+    if (missingCovers.length > 0) {
+      await Promise.all(missingCovers.map(async (track) => {
+        try {
+          const response = await fetch(
+            `https://api.deezer.com/search/track?q=${encodeURIComponent(`${track.artist} ${track.title}`)}&limit=1`
+          );
+          if (!response.ok) return;
+          const payload = await response.json();
+          const match = payload.data?.[0];
+          const resolved = match?.album?.cover_xl || match?.album?.cover_big || '';
+          if (resolved) {
+            track.cover = resolved;
+            track.artworkMedium = resolved;
+            track.artworkLarge = resolved;
+          }
+        } catch {}
+      }));
+    }
+
+    return res.json({ name, cover, tracks });
+  } catch (error) {
+    console.error('Falha em /api/import-playlist:', error);
+    return res.status(502).json({ error: 'playlist_import_failed', message: error.message });
   }
 });
 app.get('/api/stream', async (req, res) => {
