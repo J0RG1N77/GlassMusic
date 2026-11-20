@@ -93,6 +93,101 @@ app.get('/api/discover', async (req, res) => {
     return res.status(502).json({ error: 'discover_unavailable', message: error.message });
   }
 });
+app.get('/api/autoplay', async (req, res) => {
+  const artist = String(req.query.artist || '').trim();
+  const title = String(req.query.title || '').trim();
+  if (!artist || !title) {
+    return res.status(400).json({ error: 'artist_and_title_required' });
+  }
+
+  const excluded = new Set(
+    String(req.query.exclude || '')
+      .split(',')
+      .map((value) => value.trim().toLocaleLowerCase())
+      .filter(Boolean)
+  );
+  excluded.add(title.toLocaleLowerCase());
+  excluded.add(artist.toLocaleLowerCase());
+
+  try {
+    const rawTracks = [];
+    const fetchJson = async (url) => {
+      const response = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!response.ok) return null;
+      return response.json();
+    };
+
+    const artistSearch = await fetchJson(
+      `https://api.deezer.com/search/artist?q=${encodeURIComponent(artist)}&limit=5`
+    );
+    const artists = artistSearch?.data || [];
+    const exactArtist = artists.find((item) => (
+      item.name.toLocaleLowerCase() === artist.toLocaleLowerCase()
+    )) || artists[0];
+
+    if (exactArtist?.id) {
+      const relatedPayload = await fetchJson(
+        `https://api.deezer.com/artist/${exactArtist.id}/related?limit=8`
+      );
+      const relatedArtists = (relatedPayload?.data || []).slice(0, 4);
+      const radioPayloads = await Promise.all(
+        relatedArtists.map((related) =>
+          fetchJson(`https://api.deezer.com/artist/${related.id}/radio?limit=12`)
+        )
+      );
+      for (const payload of radioPayloads) {
+        rawTracks.push(...(payload?.data || []));
+      }
+    }
+
+    if (rawTracks.length < 8) {
+      const fallbackPayload = await fetchJson(
+        `https://api.deezer.com/search/track?q=${encodeURIComponent(`${artist} ${title}`)}&limit=15`
+      );
+      rawTracks.push(...(fallbackPayload?.data || []));
+    }
+
+    const tracks = [];
+    const seen = new Set();
+    for (const track of rawTracks) {
+      const trackTitle = String(track.title || '').trim();
+      const trackArtist = String(track.artist?.name || '').trim();
+      if (!trackTitle || !trackArtist) continue;
+      const key = `${trackArtist.toLocaleLowerCase()}::${trackTitle.toLocaleLowerCase()}`;
+      if (seen.has(key) || excluded.has(key) || excluded.has(trackTitle.toLocaleLowerCase())) continue;
+      if (trackArtist.toLocaleLowerCase() === artist.toLocaleLowerCase()) continue;
+      seen.add(key);
+      tracks.push({
+        trackId: `deezer-${track.id}`,
+        title: trackTitle,
+        artist: trackArtist,
+        album: track.album?.title || 'Deezer',
+        cover: track.album?.cover_xl || track.album?.cover_big || '',
+        artworkMedium: (track.album?.cover_big || track.album?.cover_xl || 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music'),
+        artworkLarge: (track.album?.cover_xl || track.album?.cover_big || 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music'),
+        duration: `${Math.floor((Number(track.duration) || 180) / 60)}:${String((Number(track.duration) || 180) % 60).padStart(2, '0')}`,
+        durationSec: Math.max(1, Number(track.duration) || 180),
+        previewUrl: track.preview || ''
+      });
+    }
+
+    for (let i = tracks.length - 1; i > 0; i--) {
+      if (Math.random() < 0.55) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
+      }
+    }
+    const recommendations = tracks.slice(0, 8);
+    const result = recommendations.length >= 5
+      ? recommendations
+      : recommendations.concat(tracks.slice(recommendations.length, 5));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ tracks: result.slice(0, 8) });
+  } catch (error) {
+    console.error('Falha em /api/autoplay:', error);
+    return res.status(502).json({ error: 'autoplay_unavailable', message: error.message });
+  }
+});
 app.get('/api/stream', async (req, res) => {
   try {
     await pipeAudioStream(req, res, req.query);

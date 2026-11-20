@@ -33,6 +33,7 @@ import { renderTrackCard } from './ui/renderers.js';
         accentMode: 'manual',
         atmosphereMode: 'soft',
         frequencyVisualizer: false,
+        autoPlayEnabled: true,
         backendUrl: DEFAULT_BACKEND_URL
       };
 
@@ -71,6 +72,7 @@ import { renderTrackCard } from './ui/renderers.js';
         currentTrack: null,
         isQueueOpen: false,
         queueTab: 'queue',
+        autoPlayEnabled: true,
         isPlaying: false,
         shuffle: false,
         repeatMode: 'off',           // 'off' | 'all' | 'one'
@@ -99,6 +101,7 @@ import { renderTrackCard } from './ui/renderers.js';
             const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEYS.SETTINGS) || 'null');
             if (savedSettings) {
               state.settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+              state.autoPlayEnabled = state.settings.autoPlayEnabled !== false;
               if (window.location.protocol === 'https:' && /^https?:\/\/localhost(?::\d+)?$/i.test(state.settings.backendUrl)) {
                 state.settings.backendUrl = DEFAULT_BACKEND_URL;
                 this.saveSettings();
@@ -415,6 +418,21 @@ import { renderTrackCard } from './ui/renderers.js';
          4. SERVIÇOS DE API: ITUNES SEARCH, LRCLIB & PROXY NODE.JS
          ====================================================================== */
       const ApiService = {
+        async fetchAutoplay(artist, title, exclude = []) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          const params = new URLSearchParams({
+            artist,
+            title,
+            exclude: Array.isArray(exclude) ? exclude.join(',') : ''
+          });
+          const response = await fetch(`${baseUrl}/api/autoplay?${params.toString()}`, {
+            cache: 'no-store'
+          });
+          if (!response.ok) throw new Error('Não foi possível carregar a Rádio da Faixa');
+          const data = await response.json();
+          return Array.isArray(data.tracks) ? data.tracks : [];
+        },
+
         async discoverTracks(category) {
           const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
           try {
@@ -713,6 +731,39 @@ import { renderTrackCard } from './ui/renderers.js';
           UI.showToast('Adicionada à fila', 'success');
         },
 
+        async ensureAutoplayQueue(track, playFirst = false) {
+          if (!state.autoPlayEnabled || state.repeatMode === 'all' || state.repeatMode === 'one') return;
+          if (!track?.artist || !track?.title) return;
+          if (state.priorityQueue.length > 0 || state.queue.length > 0) return;
+          if (this.autoplayLoading) return;
+
+          this.autoplayLoading = true;
+          try {
+            const exclude = [
+              track.title,
+              track.trackId,
+              track.artist,
+              ...state.history.map((item) => item.title)
+            ].filter(Boolean);
+            const recommendations = await ApiService.fetchAutoplay(track.artist, track.title, exclude);
+            if (!state.autoPlayEnabled) return;
+            const firstTrack = recommendations[0];
+            if (!firstTrack) return;
+            const cleanTrack = Storage.sanitizeTrackMetadata({
+              ...firstTrack,
+              trackId: firstTrack.trackId || `radio-${firstTrack.artist}-${firstTrack.title}`,
+              artworkMedium: firstTrack.artworkMedium || firstTrack.cover,
+              artworkLarge: firstTrack.artworkLarge || firstTrack.cover
+            });
+            UI.showToast('Próxima da Rádio da Faixa', 'success');
+            if (playFirst) this.playNow(cleanTrack);
+          } catch (error) {
+            console.warn('Falha ao carregar Rádio da Faixa:', error.message);
+          } finally {
+            this.autoplayLoading = false;
+          }
+        },
+
         handleNextTrack(autoAdvance = false) {
           let nextTrack = null;
           if (state.priorityQueue.length > 0) {
@@ -724,6 +775,15 @@ import { renderTrackCard } from './ui/renderers.js';
           if (nextTrack) {
             Storage.saveQueue();
             this.playTrack(nextTrack);
+            return;
+          }
+
+          if (state.autoPlayEnabled && state.repeatMode !== 'all' && state.repeatMode !== 'one') {
+            if (this.autoplayLoading) {
+              setTimeout(() => this.handleNextTrack(true), 300);
+              return;
+            }
+            void this.ensureAutoplayQueue(state.currentTrack, true);
             return;
           }
 
@@ -1105,6 +1165,20 @@ import { renderTrackCard } from './ui/renderers.js';
 
         renderQueueDrawer() {
           this.updateQueueBadge();
+          const autoplayToggle = document.getElementById('toggle-autoplay-radio');
+          const autoplayKnob = document.getElementById('toggle-autoplay-knob');
+          if (autoplayToggle) {
+            autoplayToggle.setAttribute('aria-checked', String(state.autoPlayEnabled));
+            if (autoplayToggle.lastElementChild) {
+              autoplayToggle.lastElementChild.style.backgroundColor =
+                state.autoPlayEnabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.16)';
+            }
+          }
+          if (autoplayKnob) {
+            autoplayKnob.style.transform = state.autoPlayEnabled
+              ? 'translateX(20px)'
+              : 'translateX(0px)';
+          }
           document.querySelectorAll('[data-queue-tab]').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.queueTab === state.queueTab);
           });
@@ -1968,6 +2042,18 @@ import { renderTrackCard } from './ui/renderers.js';
             UI.renderQueueDrawer();
           });
         });
+        document.getElementById('toggle-autoplay-radio')?.addEventListener('click', () => {
+          state.autoPlayEnabled = !state.autoPlayEnabled;
+          state.settings.autoPlayEnabled = state.autoPlayEnabled;
+          Storage.saveSettings();
+          UI.renderQueueDrawer();
+          UI.showToast(
+            state.autoPlayEnabled
+              ? 'Reprodução Automática ativada'
+              : 'Reprodução Automática desativada',
+            'success'
+          );
+        });
         document.addEventListener('click', (event) => {
           if (!event.target.closest('#track-options-menu') && !event.target.closest('[data-action="menu"]')) {
             document.getElementById('track-options-menu')?.classList.add('hidden');
@@ -2145,6 +2231,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
         document.getElementById('btn-reset-glass').addEventListener('click', () => {
           state.settings = { ...DEFAULT_SETTINGS };
+          state.autoPlayEnabled = true;
           Storage.saveSettings();
           ThemeEngine.applyAll();
           UI.renderAccentPresets();

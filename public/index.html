@@ -694,6 +694,18 @@
         <button data-queue-tab="queue" class="queue-tab glass-chip active flex-1 py-2 rounded-xl text-xs text-white/70">Fila</button>
         <button data-queue-tab="history" class="queue-tab glass-chip flex-1 py-2 rounded-xl text-xs text-white/70">Histórico</button>
       </div>
+      <div class="px-4 pt-3">
+        <button id="toggle-autoplay-radio" type="button" role="switch" aria-checked="true"
+                class="w-full glass-chip px-3.5 py-2.5 rounded-2xl flex items-center justify-between gap-3">
+          <span class="flex items-center gap-2 text-xs font-medium text-white/80">
+            <i data-lucide="radio" class="w-4 h-4 accent-text"></i>
+            <span>Reprodução Automática</span>
+          </span>
+          <span class="relative w-11 h-6 rounded-full p-0.5 transition-colors bg-[var(--accent-color)]">
+            <span id="toggle-autoplay-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-[20px]"></span>
+          </span>
+        </button>
+      </div>
       <div id="queue-drawer-content" class="flex-1 overflow-y-auto px-3 pb-4 pt-3"></div>
     </div>
   </aside>
