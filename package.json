@@ -48,6 +48,7 @@
     ],
     "win": {
       "target": "nsis",
+      "artifactName": "Glass-Music-Setup-${version}.${ext}",
       "icon": "desktop/icon.ico"
     },
     "nsis": {

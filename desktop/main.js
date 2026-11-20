@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 
@@ -7,20 +8,38 @@ const SERVER_PORT = 3001;
 const SERVER_URL = `http://localhost:${SERVER_PORT}`;
 
 let mainWindow;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { autoUpdater } = require('electron-updater');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.allowPrerelease = false;
+autoUpdater.allowDowngrade = false;
+autoUpdater.setFeedURL({
+  provider: 'github',
+  owner: 'J0RG1N77',
+  repo: 'GlassMusic'
+});
+autoUpdater.logger = console;
 
 function sendUpdateStatus(status, data = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('update-status', { status, ...data });
 }
 
-autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
-autoUpdater.on('update-available', (info) => sendUpdateStatus('update-available', { version: info.version }));
-autoUpdater.on('update-not-available', (info) => sendUpdateStatus('update-not-available', { version: info.version }));
+autoUpdater.on('checking-for-update', () => {
+  console.log('[updater] Verificando atualizações...');
+  sendUpdateStatus('checking', { currentVersion: app.getVersion() });
+});
+autoUpdater.on('update-available', (info) => {
+  console.log('[updater] Atualização disponível:', info.version);
+  sendUpdateStatus('update-available', { version: info.version, currentVersion: app.getVersion() });
+});
+autoUpdater.on('update-not-available', (info) => {
+  console.log('[updater] Nenhuma atualização disponível:', info.version);
+  sendUpdateStatus('update-not-available', { version: info.version, currentVersion: app.getVersion() });
+});
 autoUpdater.on('download-progress', (progress) => sendUpdateStatus('download-progress', {
   percent: progress.percent,
   transferred: progress.transferred,
@@ -28,10 +47,30 @@ autoUpdater.on('download-progress', (progress) => sendUpdateStatus('download-pro
   bytesPerSecond: progress.bytesPerSecond
 }));
 autoUpdater.on('update-downloaded', (info) => sendUpdateStatus('update-downloaded', { version: info.version }));
-autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || String(error) }));
+autoUpdater.on('error', (error) => {
+  console.error('[updater] Erro:', error);
+  sendUpdateStatus('error', { message: error?.message || String(error) });
+});
 
 ipcMain.on('restart-and-install', () => {
   if (app.isPackaged) autoUpdater.quitAndInstall();
+});
+
+async function checkForUpdates() {
+  if (!app.isPackaged) {
+    sendUpdateStatus('development', { message: 'Atualizações disponíveis apenas na versão instalada.' });
+    return;
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    console.error('[updater] Falha ao verificar:', error);
+    sendUpdateStatus('error', { message: error?.message || String(error) });
+  }
+}
+
+ipcMain.on('check-for-updates', () => {
+  void checkForUpdates();
 });
 
 async function waitForServer() {
@@ -71,7 +110,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(app.getAppPath(), 'desktop', 'preload.cjs')
+      preload: path.join(__dirname, 'preload.cjs')
     }
   };
   if (existsSync(iconPath)) options.icon = iconPath;
@@ -85,9 +124,7 @@ function createWindow() {
   mainWindow.webContents.once('did-finish-load', () => {
     if (!app.isPackaged) return;
     setTimeout(() => {
-      void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
-        sendUpdateStatus('error', { message: error?.message || String(error) });
-      });
+      void checkForUpdates();
     }, 4000);
   });
   mainWindow.on('closed', () => {

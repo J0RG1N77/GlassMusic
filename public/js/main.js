@@ -2515,7 +2515,8 @@ import { renderTrackCard } from './ui/renderers.js';
       }
 
       function setupUpdateBanner() {
-        if (!window.glassMusicUpdater) return;
+        const updater = window.electronUpdater || window.glassMusicUpdater;
+        if (!updater) return;
         const banner = document.getElementById('update-banner');
         const title = document.getElementById('update-banner-title');
         const detail = document.getElementById('update-banner-detail');
@@ -2527,12 +2528,32 @@ import { renderTrackCard } from './ui/renderers.js';
         restartButton.addEventListener('click', () => {
           restartButton.disabled = true;
           restartButton.textContent = 'Reiniciando...';
-          window.glassMusicUpdater.restartAndInstall();
+          updater.restartAndInstall();
         });
 
-        window.glassMusicUpdater.onUpdateStatus((payload) => {
+        const checkDetail = document.getElementById('update-check-detail');
+        const checkButton = document.getElementById('btn-check-updates');
+        checkButton?.addEventListener('click', () => {
+          if (checkDetail) checkDetail.textContent = 'Verificando...';
+          checkButton.disabled = true;
+          checkButton.textContent = 'Verificando...';
+          updater.checkForUpdates();
+        });
+
+        updater.onUpdateStatus((payload) => {
           if (!payload?.status) return;
-          if (payload.status === 'download-progress') {
+          if (payload.status === 'checking') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Verificando atualizações';
+            detail.textContent = 'Consultando o GitHub Releases...';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Verificando atualizações...';
+            if (checkButton) {
+              checkButton.disabled = true;
+              checkButton.textContent = 'Verificando...';
+            }
+          } else if (payload.status === 'download-progress') {
             const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
             banner.classList.remove('hidden');
             title.textContent = 'Baixando atualização';
@@ -2549,6 +2570,11 @@ import { renderTrackCard } from './ui/renderers.js';
             progressWrap.classList.add('hidden');
             restartButton.classList.remove('hidden');
             lucide.createIcons({ root: banner });
+            if (checkDetail) checkDetail.textContent = `Versão ${payload.version || ''} pronta`;
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
           } else if (payload.status === 'update-available') {
             banner.classList.remove('hidden');
             title.textContent = 'Atualização disponível';
@@ -2556,12 +2582,43 @@ import { renderTrackCard } from './ui/renderers.js';
             progressWrap.classList.remove('hidden');
             progressBar.style.width = '0%';
             restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = `Atualização ${payload.version || ''} disponível`;
+          } else if (payload.status === 'update-not-available') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Você já está atualizado';
+            detail.textContent = payload.currentVersion
+              ? `Versão atual: ${payload.currentVersion}`
+              : 'Nenhuma atualização encontrada';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = `Você já está na versão ${payload.currentVersion || ''}`;
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
+            setTimeout(() => banner.classList.add('hidden'), 5000);
+          } else if (payload.status === 'development') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Modo desenvolvimento';
+            detail.textContent = payload.message || 'Atualizações disponíveis na versão instalada';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Verificação disponível na versão instalada';
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
           } else if (payload.status === 'error') {
             banner.classList.remove('hidden');
             title.textContent = 'Falha ao atualizar';
             detail.textContent = payload.message || 'Não foi possível verificar a atualização';
             progressWrap.classList.add('hidden');
             restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Erro ao verificar atualizações';
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
           }
         });
       }
