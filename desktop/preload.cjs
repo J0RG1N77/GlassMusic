@@ -1,17 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const fs = require('node:fs');
-const path = require('node:path');
+const appVersion = ipcRenderer.sendSync('get-app-version') || '';
 
-function getPackageVersion() {
-  try {
-    const packagePath = path.join(__dirname, '..', 'package.json');
-    return JSON.parse(fs.readFileSync(packagePath, 'utf8')).version;
-  } catch {
-    return '';
+const mediaControls = {
+  sendPlaybackState(isPlaying) {
+    ipcRenderer.send('playback-state-changed', Boolean(isPlaying));
+  },
+  onMediaControl(listener) {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event, action) => listener(action);
+    ipcRenderer.on('media-control', handler);
+    return () => ipcRenderer.removeListener('media-control', handler);
   }
-}
-
-const appVersion = ipcRenderer.sendSync('get-app-version') || getPackageVersion();
+};
 
 contextBridge.exposeInMainWorld('glassMusicVersion', {
   get() {
@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('glassMusicVersion', {
 });
 
 contextBridge.exposeInMainWorld('glassMusicUpdater', {
+  ...mediaControls,
   onUpdateStatus(listener) {
     if (typeof listener !== 'function') return () => {};
     const handler = (_event, payload) => listener(payload);
@@ -35,6 +36,7 @@ contextBridge.exposeInMainWorld('glassMusicUpdater', {
 });
 
 contextBridge.exposeInMainWorld('electronUpdater', {
+  ...mediaControls,
   onUpdateStatus(listener) {
     if (typeof listener !== 'function') return () => {};
     const handler = (_event, payload) => listener(payload);
@@ -48,3 +50,5 @@ contextBridge.exposeInMainWorld('electronUpdater', {
     ipcRenderer.send('check-for-updates');
   }
 });
+
+contextBridge.exposeInMainWorld('glassMusicControls', mediaControls);

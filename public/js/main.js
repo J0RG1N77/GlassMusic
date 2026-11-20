@@ -607,18 +607,31 @@ import { renderTrackCard } from './ui/renderers.js';
       const audio = document.getElementById('native-audio');
 
       const AudioEngine = {
+        mediaControlActionsRef: { current: {} },
+
+        updateMediaControlActions() {
+          this.mediaControlActionsRef.current = {
+            prev: () => this.prevTrack(),
+            'toggle-play': () => this.togglePlayPause(),
+            next: () => this.nextTrack()
+          };
+        },
+
         init() {
           audio.volume = 0.85;
           ThemeEngine.initAudioVisualizer();
+          this.updateMediaControlActions();
 
           audio.addEventListener('play', () => {
             state.isPlaying = true;
+            window.glassMusicControls?.sendPlaybackState(true);
             UI.updatePlayStateUI();
             this.updateMediaSessionPlaybackState();
           });
 
           audio.addEventListener('pause', () => {
             state.isPlaying = false;
+            window.glassMusicControls?.sendPlaybackState(false);
             UI.updatePlayStateUI();
             this.updateMediaSessionPlaybackState();
           });
@@ -640,6 +653,13 @@ import { renderTrackCard } from './ui/renderers.js';
             } else {
               this.handleNextTrack(true);
             }
+          });
+
+          const mediaControls = window.glassMusicControls
+            || window.electronUpdater
+            || window.glassMusicUpdater;
+          mediaControls?.onMediaControl?.((action) => {
+            this.mediaControlActionsRef.current[action]?.();
           });
 
           this.setupMediaSessionHandlers();

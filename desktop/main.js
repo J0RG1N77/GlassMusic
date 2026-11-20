@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -25,6 +25,83 @@ autoUpdater.logger = console;
 
 ipcMain.on('get-app-version', (event) => {
   event.returnValue = app.getVersion();
+});
+
+function createNativeControlIcon(icon) {
+  const width = 32;
+  const height = 32;
+  const bitmap = Buffer.alloc(width * height * 4);
+  const setPixel = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const offset = (y * width + x) * 4;
+    bitmap[offset] = 255;
+    bitmap[offset + 1] = 255;
+    bitmap[offset + 2] = 255;
+    bitmap[offset + 3] = 255;
+  };
+  const drawBar = (x) => {
+    for (let y = 8; y < 24; y += 1) {
+      for (let offset = -1; offset <= 1; offset += 1) setPixel(x + offset, y);
+    }
+  };
+  const drawTriangle = (direction) => {
+    for (let row = 0; row < 16; row += 1) {
+      const extent = (row <= 8 ? row : 16 - row) * 2;
+      const start = direction === 'right' ? 8 : 24 - extent;
+      const end = direction === 'right' ? 8 + extent : 24;
+      for (let x = start; x <= end; x += 1) setPixel(x, 8 + row);
+    }
+  };
+
+  if (icon === 'prev') {
+    drawBar(7);
+    drawTriangle('left');
+  } else if (icon === 'play') {
+    drawTriangle('right');
+  } else if (icon === 'pause') {
+    drawBar(11);
+    drawBar(20);
+  } else if (icon === 'next') {
+    drawTriangle('right');
+    drawBar(25);
+  }
+
+  const image = nativeImage.createFromBitmap(bitmap, { width, height });
+  return image.isEmpty() ? null : image;
+}
+
+function updateThumbarButtons(isPlaying = false) {
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
+
+  const buttons = [
+    {
+      tooltip: 'Anterior',
+      icon: createNativeControlIcon('prev'),
+      click() {
+        mainWindow?.webContents.send('media-control', 'prev');
+      }
+    },
+    {
+      tooltip: isPlaying ? 'Pausar' : 'Reproduzir',
+      icon: createNativeControlIcon(isPlaying ? 'pause' : 'play'),
+      click() {
+        mainWindow?.webContents.send('media-control', 'toggle-play');
+      }
+    },
+    {
+      tooltip: 'Próxima',
+      icon: createNativeControlIcon('next'),
+      click() {
+        mainWindow?.webContents.send('media-control', 'next');
+      }
+    }
+  ].filter((button) => button.icon && !button.icon.isEmpty());
+
+  mainWindow.setThumbarButtons(buttons);
+}
+
+ipcMain.on('playback-state-changed', (_event, isPlaying) => {
+  updateThumbarButtons(Boolean(isPlaying));
 });
 
 function sendUpdateStatus(status, data = {}) {
@@ -126,6 +203,7 @@ function createWindow() {
   });
   mainWindow.loadURL(SERVER_URL);
   mainWindow.webContents.once('did-finish-load', () => {
+    updateThumbarButtons(false);
     if (!app.isPackaged) return;
     setTimeout(() => {
       void checkForUpdates();
