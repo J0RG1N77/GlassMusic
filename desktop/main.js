@@ -1,4 +1,5 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 
@@ -6,6 +7,32 @@ const SERVER_PORT = 3001;
 const SERVER_URL = `http://localhost:${SERVER_PORT}`;
 
 let mainWindow;
+const require = createRequire(import.meta.url);
+const { autoUpdater } = require('electron-updater');
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function sendUpdateStatus(status, data = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('update-status', { status, ...data });
+}
+
+autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
+autoUpdater.on('update-available', (info) => sendUpdateStatus('update-available', { version: info.version }));
+autoUpdater.on('update-not-available', (info) => sendUpdateStatus('update-not-available', { version: info.version }));
+autoUpdater.on('download-progress', (progress) => sendUpdateStatus('download-progress', {
+  percent: progress.percent,
+  transferred: progress.transferred,
+  total: progress.total,
+  bytesPerSecond: progress.bytesPerSecond
+}));
+autoUpdater.on('update-downloaded', (info) => sendUpdateStatus('update-downloaded', { version: info.version }));
+autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || String(error) }));
+
+ipcMain.on('restart-and-install', () => {
+  if (app.isPackaged) autoUpdater.quitAndInstall();
+});
 
 async function waitForServer() {
   const deadline = Date.now() + 15_000;
@@ -43,7 +70,8 @@ function createWindow() {
     icon: 'desktop/icon.ico',
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(app.getAppPath(), 'desktop', 'preload.cjs')
     }
   };
   if (existsSync(iconPath)) options.icon = iconPath;
@@ -54,6 +82,14 @@ function createWindow() {
     return { action: 'deny' };
   });
   mainWindow.loadURL(SERVER_URL);
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (!app.isPackaged) return;
+    setTimeout(() => {
+      void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+        sendUpdateStatus('error', { message: error?.message || String(error) });
+      });
+    }, 4000);
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

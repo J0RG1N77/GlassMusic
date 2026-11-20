@@ -2514,6 +2514,58 @@ import { renderTrackCard } from './ui/renderers.js';
         });
       }
 
+      function setupUpdateBanner() {
+        if (!window.glassMusicUpdater) return;
+        const banner = document.getElementById('update-banner');
+        const title = document.getElementById('update-banner-title');
+        const detail = document.getElementById('update-banner-detail');
+        const progressWrap = document.getElementById('update-progress-wrap');
+        const progressBar = document.getElementById('update-progress-bar');
+        const restartButton = document.getElementById('btn-restart-update');
+        if (!banner || !title || !detail || !progressWrap || !progressBar || !restartButton) return;
+
+        restartButton.addEventListener('click', () => {
+          restartButton.disabled = true;
+          restartButton.textContent = 'Reiniciando...';
+          window.glassMusicUpdater.restartAndInstall();
+        });
+
+        window.glassMusicUpdater.onUpdateStatus((payload) => {
+          if (!payload?.status) return;
+          if (payload.status === 'download-progress') {
+            const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+            banner.classList.remove('hidden');
+            title.textContent = 'Baixando atualização';
+            detail.textContent = `${percent.toFixed(0)}% concluído`;
+            progressWrap.classList.remove('hidden');
+            progressBar.style.width = `${percent}%`;
+            restartButton.classList.add('hidden');
+          } else if (payload.status === 'update-downloaded') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Atualização pronta';
+            detail.textContent = payload.version
+              ? `Versão ${payload.version} instalada no cache`
+              : 'A nova versão está pronta';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.remove('hidden');
+            lucide.createIcons({ root: banner });
+          } else if (payload.status === 'update-available') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Atualização disponível';
+            detail.textContent = payload.version ? `Baixando versão ${payload.version}...` : 'Baixando atualização...';
+            progressWrap.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            restartButton.classList.add('hidden');
+          } else if (payload.status === 'error') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Falha ao atualizar';
+            detail.textContent = payload.message || 'Não foi possível verificar a atualização';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+          }
+        });
+      }
+
       function setupPWA() {
         if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
           navigator.serviceWorker.register(new URL('./sw.js', document.baseURI))
@@ -2549,6 +2601,7 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.updateFavoritesBadge();
         UI.updateQueueBadge();
         UI.updateTechnicalBadge();
+        setupUpdateBanner();
 
         AudioEngine.init();
         bindEvents();

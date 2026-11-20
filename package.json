@@ -1,6 +1,6 @@
 {
   "name": "glass-music",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Glass Music audio player",
   "private": true,
   "type": "module",
@@ -14,6 +14,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "electron-updater": "^6.8.11",
     "express": "^4.21.2",
     "yt-search": "^2.12.1"
   },
@@ -29,6 +30,13 @@
       "pt-BR",
       "en-US"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "J0RG1N77",
+        "repo": "GlassMusic"
+      }
+    ],
     "files": [
       "desktop/**/*",
       "server/**/*",
@@ -37,12 +45,6 @@
       "!**/node_modules/**/{test,tests,__tests__,docs,examples}/**",
       "!**/node_modules/**/*.md",
       "!**/node_modules/**/*.d.ts"
-    ],
-    "extraResources": [
-      {
-        "from": "desktop/bin",
-        "to": "bin"
-      }
     ],
     "win": {
       "target": "nsis",
