@@ -483,26 +483,58 @@ import { renderTrackCard } from './ui/renderers.js';
 
         // Busca metadados oficiais no iTunes Search API (sem necessidade de chave)
         async searchTracks(query, limit = 25) {
-          const url = `https://itunes.apple.com/search?media=music&entity=song&country=BR&limit=${limit}&term=${encodeURIComponent(query)}`;
-          const response = await fetch(url);
-          if (!response.ok) throw new Error('Erro ao consultar catálogo iTunes');
-          const data = await response.json();
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          try {
+            const response = await fetch(
+              `${baseUrl}/api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+              { cache: 'no-store' }
+            );
+            if (response.ok) {
+              const data = await response.json();
+              if (Array.isArray(data.tracks) && data.tracks.length > 0) return data.tracks;
+            }
+          } catch (error) {
+            console.warn('Busca combinada indisponível:', error.message);
+          }
 
-          return (data.results || [])
-            .filter(item => item.trackId && item.trackName && item.artistName)
-            .map(item => {
+          const encodedQuery = encodeURIComponent(query);
+          const responses = await Promise.allSettled([
+            fetch(`https://itunes.apple.com/search?country=US&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`),
+            fetch(`https://itunes.apple.com/search?country=BR&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`)
+          ]);
+          const tracks = [];
+          const seen = new Set();
+          for (const result of responses) {
+            if (result.status !== 'fulfilled' || !result.value.ok) continue;
+            const data = await result.value.json();
+            for (const item of data.results || []) {
+              if (!item.trackId || !item.trackName || !item.artistName) continue;
+              const key = `${item.artistName}::${item.trackName}`
+                .normalize('NFKD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLocaleLowerCase('pt-BR')
+                .replace(/[^\p{L}\p{N}]+/gu, ' ')
+                .trim();
+              if (seen.has(key)) continue;
+              seen.add(key);
               const baseArt = item.artworkUrl100 || '';
-              return {
-                trackId: item.trackId,
+              tracks.push({
+                id: `itunes-${item.trackId}`,
+                trackId: `itunes-${item.trackId}`,
                 title: item.trackName,
                 artist: item.artistName,
                 album: item.collectionName || 'Single',
                 durationSec: Math.max(1, Math.round((item.trackTimeMillis || 30000) / 1000)),
                 artworkMedium: baseArt ? baseArt.replace('100x100bb', '600x600bb') : 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
                 artworkLarge: baseArt ? baseArt.replace('100x100bb', '1000x1000bb') : 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
-                previewUrl: item.previewUrl || ''
-              };
-            });
+                previewUrl: item.previewUrl || '',
+                explicit: Boolean(item.trackExplicitness === 'explicit' || item.contentAdvisoryRating === 'Explicit')
+              });
+              if (tracks.length >= limit) break;
+            }
+            if (tracks.length >= limit) break;
+          }
+          return tracks;
         },
 
         // Consulta LRCLIB para obter letras sincronizadas (LRC) ou estáticas
@@ -1746,6 +1778,7 @@ import { renderTrackCard } from './ui/renderers.js';
                   </div>
 
                   <h3 class="text-sm font-semibold text-white truncate leading-snug" title="${this.escapeHtml(track.title)}">
+                    ${track.explicit ? '<span class="inline-flex align-middle mr-1 px-1 py-0.5 rounded border border-white/20 text-[9px] leading-none text-white/60" title="Conteúdo explícito">E</span>' : ''}
                     ${this.escapeHtml(track.title)}
                   </h3>
                   <p class="text-xs text-white/55 truncate mt-0.5" title="${this.escapeHtml(track.artist)}">

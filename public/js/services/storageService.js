@@ -44,7 +44,8 @@ export const storageService = {
       durationSec: track.durationSec,
       artworkMedium: track.artworkMedium,
       artworkLarge: track.artworkLarge,
-      previewUrl: track.previewUrl || ''
+      previewUrl: track.previewUrl || '',
+      explicit: Boolean(track.explicit)
     };
   }
 };

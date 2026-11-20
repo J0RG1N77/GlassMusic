@@ -93,6 +93,119 @@ app.get('/api/image-proxy', async (req, res) => {
     return res.status(502).json({ error: 'image_proxy_unavailable', message: error.message });
   }
 });
+app.get('/api/search', async (req, res) => {
+  const query = String(req.query.q || '').trim();
+  const limit = Math.max(1, Math.min(30, Number(req.query.limit) || 30));
+  if (!query) return res.status(400).json({ error: 'query_required' });
+
+  const normalizeKey = (artist, title) => `${String(artist || '')}::${String(title || '')}`
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+  const fetchJson = async (url) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const deezerUrl = `https://api.deezer.com/search?q=${encodedQuery}&limit=30`;
+    const itunesBrazilUrl = `https://itunes.apple.com/search?country=BR&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`;
+    const itunesUsUrl = `https://itunes.apple.com/search?country=US&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`;
+
+    const [deezerResult, itunesBrazilResult, itunesUsResult] = await Promise.allSettled([
+      fetchJson(deezerUrl),
+      fetchJson(itunesBrazilUrl),
+      fetchJson(itunesUsUrl)
+    ]);
+
+    const tracks = [];
+    const byKey = new Map();
+
+    if (deezerResult.status === 'fulfilled') {
+      for (const item of deezerResult.value.data || []) {
+        const artist = item.artist?.name;
+        const title = item.title;
+        if (!artist || !title) continue;
+        const key = normalizeKey(artist, title);
+        if (byKey.has(key)) continue;
+        const durationSec = Math.max(1, Number(item.duration) || 180);
+        const cover = item.album?.cover_xl || item.album?.cover_big || '';
+        const track = {
+          id: `deezer-${item.id}`,
+          trackId: `deezer-${item.id}`,
+          title,
+          artist,
+          album: item.album?.title || 'Deezer',
+          cover,
+          artwork: cover,
+          artworkMedium: item.album?.cover_big || cover || 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+          artworkLarge: cover || 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+          duration: durationSec,
+          durationSec,
+          previewUrl: item.preview || '',
+          explicit: Boolean(item.explicit_lyrics)
+        };
+        byKey.set(key, track);
+        tracks.push(track);
+        if (tracks.length >= limit) break;
+      }
+    }
+
+    if (tracks.length < limit) {
+      for (const itunesResult of [itunesBrazilResult, itunesUsResult]) {
+        if (itunesResult.status !== 'fulfilled') continue;
+        for (const item of itunesResult.value.results || []) {
+          if (!item.trackId || !item.trackName || !item.artistName) continue;
+          const artist = item.artistName;
+          const title = item.trackName;
+          const key = normalizeKey(artist, title);
+          if (byKey.has(key)) continue;
+          const durationSec = Math.max(1, Math.round((Number(item.trackTimeMillis) || 30000) / 1000));
+          const baseArt = item.artworkUrl100 || '';
+          const track = {
+            id: `itunes-${item.trackId}`,
+            trackId: `itunes-${item.trackId}`,
+            title,
+            artist,
+            album: item.collectionName || 'Single',
+            cover: baseArt,
+            artwork: baseArt ? baseArt.replace(/100x100bb/g, '1000x1000bb') : '',
+            artworkMedium: baseArt ? baseArt.replace(/100x100bb/g, '600x600bb') : 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+            artworkLarge: baseArt ? baseArt.replace(/100x100bb/g, '1000x1000bb') : 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+            duration: durationSec,
+            durationSec,
+            previewUrl: item.previewUrl || '',
+            explicit: Boolean(item.trackExplicitness === 'explicit' || item.contentAdvisoryRating === 'Explicit')
+          };
+          byKey.set(key, track);
+          tracks.push(track);
+          if (tracks.length >= limit) break;
+        }
+        if (tracks.length >= limit) break;
+      }
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.json({ query, tracks: tracks.slice(0, limit) });
+  } catch (error) {
+    console.error('Falha em /api/search:', error);
+    return res.status(502).json({ error: 'search_unavailable', message: error.message });
+  }
+});
 app.get('/api/discover', async (req, res) => {
   const category = String(req.query.category || '').trim().toLowerCase();
   if (!DISCOVERY_CATEGORIES[category]) {

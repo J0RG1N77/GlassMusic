@@ -89,7 +89,12 @@ function normalizeTrack(track, source, index) {
       duration: formatDuration(durationSec),
       durationSec,
       query: `${artist} ${title}`,
-      previewUrl: track.previewUrl || ''
+      previewUrl: track.previewUrl || '',
+      explicit: Boolean(
+        track.trackExplicitness === 'explicit'
+        || track.contentAdvisoryRating === 'Explicit'
+        || track.explicit === true
+      )
     };
   }
 
@@ -112,7 +117,8 @@ function normalizeTrack(track, source, index) {
     duration: formatDuration(durationSec),
     durationSec,
     query: `${artist} ${title}`,
-    previewUrl: track.preview || ''
+    previewUrl: track.preview || '',
+    explicit: Boolean(track.explicit_lyrics)
   };
 }
 
@@ -130,7 +136,8 @@ function getStaticFallback(category) {
       duration: formatDuration(durationSec),
       durationSec,
       query: `${artist} ${title}`,
-      previewUrl: ''
+      previewUrl: '',
+      explicit: false
     };
   });
 }
