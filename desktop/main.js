@@ -23,6 +23,10 @@ autoUpdater.setFeedURL({
 });
 autoUpdater.logger = console;
 
+ipcMain.on('get-app-version', (event) => {
+  event.returnValue = app.getVersion();
+});
+
 function sendUpdateStatus(status, data = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('update-status', { status, ...data });

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import dns from 'node:dns';
 import cors from 'cors';
 import express from 'express';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -38,6 +38,15 @@ app.use(express.static(path.resolve(__dirname, '../public')));
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'glass-music-proxy' }));
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'glass-music-proxy' }));
+app.get('/api/version', (_req, res) => {
+  try {
+    const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));
+    return res.json({ version: packageJson.version || '' });
+  } catch (error) {
+    console.error('[version] Falha ao ler package.json:', error);
+    return res.status(500).json({ error: 'Não foi possível obter a versão do aplicativo' });
+  }
+});
 app.get('/api/image-proxy', async (req, res) => {
   const rawUrl = String(req.query.url || '').trim();
   let coverUrl;

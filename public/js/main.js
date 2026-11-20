@@ -2691,6 +2691,24 @@ import { renderTrackCard } from './ui/renderers.js';
         });
       }
 
+      async function setupAppVersion() {
+        let version = window.glassMusicVersion?.get?.() || '';
+        if (!version) {
+          try {
+            const response = await fetch('/api/version', { cache: 'no-store' });
+            if (response.ok) version = (await response.json()).version || '';
+          } catch (error) {
+            console.warn('Não foi possível obter a versão do aplicativo:', error.message);
+          }
+        }
+        if (!version) return;
+        const label = `v${version.replace(/^v/i, '')}`;
+        const sidebarVersion = document.getElementById('app-version-sidebar');
+        const customizerVersion = document.getElementById('app-version-customizer');
+        if (sidebarVersion) sidebarVersion.textContent = label;
+        if (customizerVersion) customizerVersion.textContent = `Versão atual: ${label}`;
+      }
+
       function setupPWA() {
         if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
           navigator.serviceWorker.register(new URL('./sw.js', document.baseURI))
@@ -2727,6 +2745,7 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.updateQueueBadge();
         UI.updateTechnicalBadge();
         setupUpdateBanner();
+        void setupAppVersion();
 
         AudioEngine.init();
         bindEvents();
