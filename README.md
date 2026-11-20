@@ -1,15 +1,25 @@
 # 🎧 Glass Music
 
-PWA de streaming musical com interface **Glassmorphism**, reprodução em segundo plano e proxy de áudio self-hosted. O projeto usa JavaScript nativo com ES Modules, Node.js/Express no backend e `yt-dlp` para extrair streams de áudio do YouTube sob demanda.
+[![Site Oficial](https://img.shields.io/badge/Site_Oficial-glassmusic.vercel.app-38BDF8?style=for-the-badge&logo=vercel&logoColor=white)](https://glassmusic.vercel.app/)
+[![Versão](https://img.shields.io/badge/Release-v1.3.0-10B981?style=for-the-badge&logo=github&logoColor=white)](https://github.com/J0RG1N77/GlassMusic/releases/latest)
+[![Plataforma](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://glassmusic.vercel.app/)
+
+> 🌐 **Site Oficial & Download (Windows):** [https://glassmusic.vercel.app/](https://glassmusic.vercel.app/)
+
+Player de streaming musical desktop (Windows) e PWA com interface **Glassmorphism**, reprodução em segundo plano e proxy de áudio self-hosted. O projeto utiliza JavaScript nativo com ES Modules, Node.js/Express no backend, Electron no desktop e `yt-dlp` para extrair streams de áudio sob demanda.
 
 > **Status:** projeto experimental/educacional. O catálogo, previews, letras e streams dependem de serviços externos e podem sofrer limitações de disponibilidade, região, CORS ou mudanças de API.
+
+
+## 💻 Interface 
+<img width="1910" height="997" alt="interface" src="https://github.com/user-attachments/assets/1c6039a5-ea0c-43a5-b8b4-3e6ba9dae1b6" />
+
 
 
 ## 📱 Interface Mobile
 
 <img width="334" height="600" alt="GlassmMusicHome" src="https://github.com/user-attachments/assets/bb7afd6e-7a36-4913-aefe-fe96768e37e0" />
 <img width="334" height="600" alt="GlassMusicCapa" src="https://github.com/user-attachments/assets/b954f7b8-480f-4a24-9a94-f8116c30f595" />
-<img width="334" height="600" alt="GlassMusicLetras" src="https://github.com/user-attachments/assets/30387f5c-5e55-4a63-a672-136912450828" />
 
 
 ## ✨ Funcionalidades
