@@ -5,7 +5,11 @@ import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pipeAudioStream } from './services/youtubeProxy.js';
+import {
+  getPrefetchStatus,
+  pipeAudioStream,
+  prefetchYouTubeStream
+} from './services/youtubeProxy.js';
 import { DISCOVERY_CATEGORIES, getDiscoveryCategory } from './services/discoveryService.js';
 
 dns.setDefaultResultOrder('ipv4first');
@@ -92,6 +96,27 @@ app.get('/api/discover', async (req, res) => {
   } catch (error) {
     console.error('Falha em /api/discover:', error);
     return res.status(502).json({ error: 'discover_unavailable', message: error.message });
+  }
+});
+app.post('/api/prefetch', async (req, res) => {
+  const artist = String(req.body?.artist || '').trim();
+  const title = String(req.body?.title || '').trim();
+  if (!artist || !title) {
+    return res.status(400).json({ error: 'artist_and_title_required' });
+  }
+  try {
+    const status = getPrefetchStatus({ artist, title });
+    if (status === 'cached') return res.json({ status: 'cached' });
+    if (status === 'prefetching') return res.json({ status: 'prefetching' });
+
+    const resolution = prefetchYouTubeStream({ artist, title });
+    void resolution.catch((error) => {
+      console.error(`Falha no prefetch de "${artist} - ${title}":`, error);
+    });
+    return res.json({ status: 'prefetching' });
+  } catch (error) {
+    console.error('Falha em /api/prefetch:', error);
+    return res.status(502).json({ error: 'prefetch_failed', message: error.message });
   }
 });
 app.get('/api/autoplay', async (req, res) => {

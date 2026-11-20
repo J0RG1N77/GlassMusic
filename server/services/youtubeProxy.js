@@ -7,7 +7,20 @@ import yts from 'yt-search';
 const execFileAsync = promisify(execFile);
 const DURATION_TOLERANCE_SECONDS = 5;
 const DIRECT_URL_CACHE_TTL_MS = 30 * 60 * 1000;
+const PREFETCH_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const directUrlCache = new Map();
+const resolvedStreamCache = new Map();
+const inFlightPromises = new Map();
+
+function normalizeTrackQuery(artist, title) {
+  return `${String(artist || '').trim().normalize('NFKC').toLocaleLowerCase('pt-BR')} - ${String(title || '').trim().normalize('NFKC').toLocaleLowerCase('pt-BR')}`;
+}
+
+function removeExpiredResolvedEntries(now = Date.now()) {
+  for (const [key, value] of resolvedStreamCache) {
+    if (value.expiresAt <= now) resolvedStreamCache.delete(key);
+  }
+}
 
 function isTopicChannel(channelTitle = '') {
   return /-\s*topic\b/i.test(channelTitle);
@@ -108,22 +121,57 @@ async function findYtDlpExecutable() {
 export async function resolveYouTubeStream({ artist, title, duration }) {
   if (!artist || !title) throw new Error('artist e title são obrigatórios');
   const requestedDuration = Number(duration);
-  if (!Number.isFinite(requestedDuration) || requestedDuration <= 0) {
+  if (duration !== undefined && (!Number.isFinite(requestedDuration) || requestedDuration <= 0)) {
     throw new Error('duration inválida');
   }
 
-  const results = await yts.search(`${artist} ${title}`);
-  const candidates = (results.videos || [])
-    .filter((video) => durationMatches(video.seconds, requestedDuration))
-    .sort((a, b) => Number(isTopicChannel(b.author?.name)) - Number(isTopicChannel(a.author?.name)));
-  const selected = candidates[0];
-  if (!selected?.url) throw new Error('Nenhum vídeo compatível encontrado');
+  removeExpiredResolvedEntries();
+  const queryKey = normalizeTrackQuery(artist, title);
+  const cached = resolvedStreamCache.get(queryKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  return {
-    ...await extractDirectAudioUrl(selected.url),
-    sourceUrl: selected.url,
-    title: selected.title
-  };
+  let promise = inFlightPromises.get(queryKey);
+  if (!promise) {
+    promise = (async () => {
+      const results = await yts.search(`${artist} ${title}`);
+      let candidates = (results.videos || []);
+      if (requestedDuration > 0) {
+        candidates = candidates.filter((video) => durationMatches(video.seconds, requestedDuration));
+      }
+      candidates.sort((a, b) => Number(isTopicChannel(b.author?.name)) - Number(isTopicChannel(a.author?.name)));
+      const selected = candidates[0];
+      if (!selected?.url) throw new Error('Nenhum vídeo compatível encontrado');
+
+      const resolved = {
+        ...await extractDirectAudioUrl(selected.url),
+        sourceUrl: selected.url,
+        title: selected.title
+      };
+      resolvedStreamCache.set(queryKey, {
+        value: resolved,
+        expiresAt: Date.now() + PREFETCH_CACHE_TTL_MS
+      });
+      return resolved;
+    })().finally(() => inFlightPromises.delete(queryKey));
+    inFlightPromises.set(queryKey, promise);
+  }
+  return promise;
+}
+
+export function getPrefetchStatus({ artist, title }) {
+  const queryKey = normalizeTrackQuery(artist, title);
+  removeExpiredResolvedEntries();
+  if (resolvedStreamCache.has(queryKey)) return 'cached';
+  if (inFlightPromises.has(queryKey)) return 'prefetching';
+  return null;
+}
+
+export async function prefetchYouTubeStream({ artist, title }) {
+  if (!artist || !title) throw new Error('artist e title são obrigatórios');
+  const status = getPrefetchStatus({ artist, title });
+  if (status === 'cached') return 'cached';
+  await resolveYouTubeStream({ artist, title });
+  return 'cached';
 }
 
 export async function pipeAudioStream(req, res, query) {
@@ -136,10 +184,12 @@ export async function pipeAudioStream(req, res, query) {
   let upstream = await fetch(resolved.url, { headers });
   if (upstream.status === 403) {
     directUrlCache.delete(cacheKey(resolved.sourceUrl));
+    invalidateResolvedStreamCache({ artist: query.artist, title: query.title });
     const refreshed = await extractDirectAudioUrl(resolved.sourceUrl);
     upstream = await fetch(refreshed.url, { headers });
   }
   if (!upstream.ok && upstream.status !== 206) {
+    invalidateResolvedStreamCache({ artist: query.artist, title: query.title });
     directUrlCache.delete(cacheKey({
       artist: query.artist,
       title: query.title,
@@ -166,4 +216,8 @@ export async function pipeAudioStream(req, res, query) {
 export function getDirectUrlCacheSize() {
   removeExpiredCacheEntries();
   return directUrlCache.size;
+}
+
+export function invalidateResolvedStreamCache({ artist, title }) {
+  resolvedStreamCache.delete(normalizeTrackQuery(artist, title));
 }

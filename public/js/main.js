@@ -73,6 +73,7 @@ import { renderTrackCard } from './ui/renderers.js';
         isQueueOpen: false,
         queueTab: 'queue',
         autoPlayEnabled: true,
+        prefetchedRadioTrack: null,
         isPlaying: false,
         shuffle: false,
         repeatMode: 'off',           // 'off' | 'all' | 'one'
@@ -418,6 +419,17 @@ import { renderTrackCard } from './ui/renderers.js';
          4. SERVIÇOS DE API: ITUNES SEARCH, LRCLIB & PROXY NODE.JS
          ====================================================================== */
       const ApiService = {
+        async prefetchTrack(track) {
+          if (!track?.title || !track?.artist) return;
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          await fetch(`${baseUrl}/api/prefetch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: track.title, artist: track.artist }),
+            cache: 'no-store'
+          }).catch(() => {});
+        },
+
         async importSpotifyPlaylist(url) {
           const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
           const response = await fetch(`${baseUrl}/api/import-playlist`, {
@@ -613,6 +625,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
           audio.addEventListener('timeupdate', () => {
             this.handleProgressUpdate();
+            this.prefetchNextTrack();
           });
 
           audio.addEventListener('loadedmetadata', () => {
@@ -650,6 +663,8 @@ import { renderTrackCard } from './ui/renderers.js';
           state.queueIndex = state.queue.findIndex(t => t.trackId === track.trackId);
 
           state.currentTrack = track;
+          state.prefetchedRadioTrack = null;
+          this.prefetchedTrackId = null;
           state.activeLyricIndex = -1;
 
           // Atualiza interface visual & iluminação ambiente imediatamente
@@ -743,6 +758,53 @@ import { renderTrackCard } from './ui/renderers.js';
           UI.showToast('Adicionada à fila', 'success');
         },
 
+        async prefetchNextTrack() {
+          if (!state.currentTrack || !audio.duration || isNaN(audio.duration)) return;
+          if (audio.duration <= 30 || (audio.duration - audio.currentTime) > 25) return;
+
+          const trackId = state.currentTrack.trackId
+            || state.currentTrack.id
+            || state.currentTrack.videoId;
+          if (!trackId || this.prefetchedTrackId === trackId) return;
+          this.prefetchedTrackId = trackId;
+
+          let nextTrack = state.priorityQueue[0] || state.queue[0] || null;
+          if (!nextTrack) {
+            if (!state.autoPlayEnabled || state.repeatMode === 'all' || state.repeatMode === 'one') return;
+            if (this.autoplayPrefetchLoading) return;
+            this.autoplayPrefetchLoading = true;
+            try {
+              const exclude = [
+                state.currentTrack.title,
+                state.currentTrack.trackId,
+                state.currentTrack.artist,
+                ...state.history.map((item) => item.title)
+              ].filter(Boolean);
+              const recommendations = await ApiService.fetchAutoplay(
+                state.currentTrack.artist,
+                state.currentTrack.title,
+                exclude
+              );
+              nextTrack = recommendations[0] || null;
+              if (!nextTrack) return;
+              nextTrack = Storage.sanitizeTrackMetadata({
+                ...nextTrack,
+                trackId: nextTrack.trackId || `radio-${nextTrack.artist}-${nextTrack.title}`,
+                artworkMedium: nextTrack.artworkMedium || nextTrack.cover,
+                artworkLarge: nextTrack.artworkLarge || nextTrack.cover
+              });
+              state.prefetchedRadioTrack = nextTrack;
+            } catch (error) {
+              console.warn('Falha ao pré-carregar recomendação:', error.message);
+              return;
+            } finally {
+              this.autoplayPrefetchLoading = false;
+            }
+          }
+
+          await ApiService.prefetchTrack(nextTrack);
+        },
+
         async ensureAutoplayQueue(track, playFirst = false) {
           if (!state.autoPlayEnabled || state.repeatMode === 'all' || state.repeatMode === 'one') return;
           if (!track?.artist || !track?.title) return;
@@ -751,6 +813,12 @@ import { renderTrackCard } from './ui/renderers.js';
 
           this.autoplayLoading = true;
           try {
+            if (state.prefetchedRadioTrack) {
+              const cleanTrack = state.prefetchedRadioTrack;
+              state.prefetchedRadioTrack = null;
+              if (playFirst) this.playNow(cleanTrack);
+              return;
+            }
             const exclude = [
               track.title,
               track.trackId,
