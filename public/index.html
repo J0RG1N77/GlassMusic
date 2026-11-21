@@ -8,6 +8,56 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Glass Music">
   <meta name="description" content="Glass Music - Streaming de música gratuito, sem anúncios, com estética de vidro fosco e reprodução em segundo plano.">
+  <style>
+    html, body {
+      background-color: #050507;
+      color: #f8fafc;
+      margin: 0;
+    }
+    #app-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: radial-gradient(circle at 50% 35%, rgba(56, 189, 248, 0.12), #050507 65%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      transition: opacity 0.35s ease, visibility 0.35s ease;
+    }
+    #app-splash .app-splash-title {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f8fafc;
+    }
+    #app-splash .app-splash-loader {
+      width: 44px;
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.16);
+    }
+    #app-splash .app-splash-loader::before {
+      content: "";
+      display: block;
+      width: 45%;
+      height: 100%;
+      border-radius: inherit;
+      background: #38bdf8;
+      animation: app-splash-progress 1s ease-in-out infinite;
+    }
+    .app-splash--hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    @keyframes app-splash-progress {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(260%); }
+    }
+  </style>
   <link rel="icon" href="./glassmusic.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./glassmusic.svg">
   <link rel="manifest" href="./manifest.webmanifest">
@@ -21,6 +71,11 @@
   <title>Glass Music - Streaming & Player</title>
 </head>
 <body class="antialiased selection:bg-sky-400/30 selection:text-white">
+  <div id="app-splash" role="status" aria-label="Carregando Glass Music">
+    <img src="./glassmusic.svg" width="56" height="56" alt="" />
+    <div class="app-splash-title">Glass Music</div>
+    <div class="app-splash-loader" aria-hidden="true"></div>
+  </div>
   <!-- Elemento de Áudio Nativo HTML5 (Permite reprodução contínua em segundo plano no Android & iOS) -->
   <audio id="native-audio" preload="metadata" crossorigin="anonymous"></audio>
 

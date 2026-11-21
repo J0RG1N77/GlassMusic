@@ -2787,6 +2787,13 @@ import { renderTrackCard } from './ui/renderers.js';
       /* ======================================================================
          BOOTSTRAP DA APLICAÇÃO
          ====================================================================== */
+function hideSplashScreen() {
+  const splash = document.getElementById('app-splash');
+  if (!splash || splash.classList.contains('app-splash--hidden')) return;
+  splash.classList.add('app-splash--hidden');
+  setTimeout(() => splash.remove(), 400);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
         Storage.load();
   applyTheme(state.settings);
@@ -2812,4 +2819,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Em Alta Agora',
           DISCOVERY_CHIPS[0].category
         );
+        requestAnimationFrame(hideSplashScreen);
 });
+
+setTimeout(hideSplashScreen, 3500);

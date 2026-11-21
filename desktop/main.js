@@ -185,7 +185,8 @@ function createWindow() {
     minWidth: 400,
     minHeight: 650,
     autoHideMenuBar: true,
-    backgroundColor: '#0a0a0f',
+    backgroundColor: '#050507',
+    show: false,
     title: 'Glass Music',
     icon: 'desktop/icon.ico',
     webPreferences: {
@@ -202,6 +203,10 @@ function createWindow() {
     return { action: 'deny' };
   });
   mainWindow.loadURL(SERVER_URL);
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.show();
+  });
   mainWindow.webContents.once('did-finish-load', () => {
     updateThumbarButtons(false);
     if (!app.isPackaged) return;
