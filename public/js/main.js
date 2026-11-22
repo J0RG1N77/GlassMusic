@@ -7,7 +7,7 @@ import { fetchLyrics as fetchLrclibLyrics, parseLrc } from './services/lrclibSer
 import { storageService } from './services/storageService.js';
 import { escapeHtml, formatTime } from './ui/dom.js';
 import { bindActionDelegation } from './ui/events.js';
-import { renderTrackCard } from './ui/renderers.js';
+import { renderPlaylistCard } from './ui/renderers.js';
 
       /* ======================================================================
          1. CONFIGURAÇÕES, CONSTANTES & ESTADO GLOBAL
@@ -147,6 +147,39 @@ import { renderTrackCard } from './ui/renderers.js';
             localStorage.setItem(STORAGE_KEYS.QUEUE, JSON.stringify(state.queue));
             localStorage.setItem(STORAGE_KEYS.PRIORITY_QUEUE, JSON.stringify(state.priorityQueue));
           } catch (e) {}
+        },
+
+        renamePlaylist(playlistId, newName) {
+          const playlist = storageService.renamePlaylist(playlistId, newName);
+          if (!playlist) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist) localPlaylist.name = playlist.name;
+          this.savePlaylists();
+          return true;
+        },
+
+        removeTrackFromPlaylist(playlistId, trackIndex) {
+          const removed = storageService.removeTrackFromPlaylist(playlistId, trackIndex);
+          if (!removed) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist?.tracks) localPlaylist.tracks.splice(trackIndex, 1);
+          this.savePlaylists();
+          return true;
+        },
+
+        moveTrackInPlaylist(playlistId, fromIndex, toIndex) {
+          if (!storageService.moveTrackInPlaylist(playlistId, fromIndex, toIndex)) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist?.tracks) {
+            const [track] = localPlaylist.tracks.splice(fromIndex, 1);
+            localPlaylist.tracks.splice(toIndex, 0, track);
+          }
+          this.savePlaylists();
+          return true;
+        },
+
+        exportPlaylistCSV(playlistId) {
+          return storageService.exportPlaylistCSV(playlistId);
         },
 
         // Sanitiza metadados da faixa antes de salvar (nunca persiste URLs de stream temporárias)
@@ -1251,6 +1284,45 @@ import { renderTrackCard } from './ui/renderers.js';
             .replace(/"/g, '&quot;');
         },
 
+        startInlineRename(titleElement, playlist, onRenamed) {
+          if (!titleElement || !playlist) return;
+          const originalName = playlist.name;
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.value = originalName;
+          input.className = 'w-full max-w-md bg-black/35 text-white border border-white/20 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-white/40';
+          titleElement.replaceChildren(input);
+          input.focus();
+          input.select();
+
+          let finished = false;
+          const finish = (save) => {
+            if (finished) return;
+            finished = true;
+            let resolvedName = originalName;
+            if (save) {
+              const newName = input.value.trim();
+              if (newName) {
+                Storage.renamePlaylist(playlist.id, newName);
+                resolvedName = newName;
+              }
+            }
+            if (typeof onRenamed === 'function') onRenamed(resolvedName);
+          };
+
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              input.blur();
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              finish(false);
+              input.blur();
+            }
+          });
+          input.addEventListener('blur', () => finish(true));
+        },
+
         formatTime(seconds) {
           if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
           const mins = Math.floor(seconds / 60);
@@ -1741,6 +1813,35 @@ import { renderTrackCard } from './ui/renderers.js';
           emptyState.classList.add('hidden');
           tracksGrid.classList.remove('hidden');
 
+          if (options.context === 'playlist') {
+            tracksGrid.className = 'flex flex-col gap-2';
+            tracksGrid.innerHTML = tracks.map((track, idx) => `
+              <article data-track-idx="${idx}" class="glass-card rounded-2xl px-3 py-2.5 flex items-center gap-3 group cursor-pointer">
+                <img src="${this.escapeHtml(track.artworkMedium || track.artworkLarge)}" alt="" class="w-12 h-12 rounded-xl object-cover border border-white/10 shrink-0" />
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold text-white truncate">
+                    ${track.explicit ? '<span class="inline-flex mr-1 px-1 py-0.5 rounded border border-white/20 text-[9px] text-white/60">E</span>' : ''}
+                    ${this.escapeHtml(track.title)}
+                  </h3>
+                  <p class="text-xs text-white/55 truncate">${this.escapeHtml(track.artist)} • ${this.escapeHtml(track.album)}</p>
+                </div>
+                <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${this.formatTime(track.durationSec)}</span>
+                <div class="relative z-[2] flex items-center gap-1 pointer-events-auto opacity-100 md:opacity-0 md:group-hover:opacity-100 transition">
+                  <button data-action="playlist-up" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 ${idx === 0 ? 'opacity-30 pointer-events-none' : ''}" title="Mover para cima">
+                    <i data-lucide="chevron-up" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button data-action="playlist-down" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 ${idx === tracks.length - 1 ? 'opacity-30 pointer-events-none' : ''}" title="Mover para baixo">
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button data-action="playlist-remove" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-rose-400 hover:bg-rose-500/10" title="Remover da playlist">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
+              </article>
+            `).join('');
+            lucide.createIcons({ root: tracksGrid });
+          } else {
+          tracksGrid.className = 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 md:gap-4 pb-6';
           const favIds = new Set(state.favorites.map(f => f.trackId));
 
           tracksGrid.innerHTML = tracks.map((track, idx) => {
@@ -1803,6 +1904,7 @@ import { renderTrackCard } from './ui/renderers.js';
               </article>
             `;
           }).join('');
+          }
 
           lucide.createIcons({ root: tracksGrid });
 
@@ -1825,6 +1927,17 @@ import { renderTrackCard } from './ui/renderers.js';
                   AudioEngine.playNext(track);
                 } else if (action === 'menu') {
                   this.openTrackOptions(track, actionBtn, e);
+                } else if (action === 'playlist-up' || action === 'playlist-down' || action === 'playlist-remove') {
+                  const playlist = state.playlists.find((item) => item.id === state.activePlaylistId);
+                  if (!playlist) return;
+                  if (action === 'playlist-remove') {
+                    Storage.removeTrackFromPlaylist(playlist.id, idx);
+                  } else if (action === 'playlist-up' && idx > 0) {
+                    Storage.moveTrackInPlaylist(playlist.id, idx, idx - 1);
+                  } else if (action === 'playlist-down' && idx < tracks.length - 1) {
+                    Storage.moveTrackInPlaylist(playlist.id, idx, idx + 1);
+                  }
+                  this.renderCurrentView();
                 } else if (action === 'play') {
                   if (state.currentTrack?.trackId === track.trackId) {
                     AudioEngine.togglePlayPause();
@@ -1963,14 +2076,32 @@ import { renderTrackCard } from './ui/renderers.js';
               this.switchView('explore');
               return;
             }
-            titleEl.textContent = pl.name;
-            subEl.textContent = `Playlist Local • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'}`;
+            const totalSeconds = (pl.tracks || []).reduce((sum, track) =>
+              sum + (Number(track.durationSec) || 0), 0
+            );
+            const durationText = totalSeconds >= 3600
+              ? `${Math.floor(totalSeconds / 3600)}h ${Math.round((totalSeconds % 3600) / 60)}min`
+              : `${Math.max(1, Math.round(totalSeconds / 60))}min`;
+            titleEl.innerHTML = `<span data-playlist-header-title="${this.escapeHtml(pl.id)}">${this.escapeHtml(pl.name)}</span>`;
+            subEl.textContent = `Playlist Local • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'} • ${durationText}`;
             actionsEl.innerHTML = `
-              ${pl.tracks.length > 0 ? `<button id="btn-play-pl" class="accent-btn px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5">
+              ${pl.tracks.length > 0 ? `<button id="btn-play-pl" class="accent-btn px-3 py-2 rounded-2xl text-xs flex items-center gap-1.5">
                 <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i>
-                <span>Tocar</span>
+                <span>Tocar Tudo</span>
+              </button>
+              <button id="btn-shuffle-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="shuffle" class="w-3.5 h-3.5"></i>
+                <span>Aleatório</span>
               </button>` : ''}
-              <button id="btn-delete-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-1">
+              <button id="btn-rename-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                <span>Renomear</span>
+              </button>
+              ${pl.tracks.length > 0 ? `<button id="btn-export-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Exportar CSV</span>
+              </button>` : ''}
+              <button id="btn-delete-pl" data-confirm-delete="0" class="glass-chip px-3 py-2 rounded-2xl text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-1">
                 <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                 <span>Excluir</span>
               </button>
@@ -1980,15 +2111,50 @@ import { renderTrackCard } from './ui/renderers.js';
             document.getElementById('btn-play-pl')?.addEventListener('click', () => {
               AudioEngine.playNow(pl.tracks[0], pl.tracks);
             });
-            document.getElementById('btn-delete-pl')?.addEventListener('click', async () => {
-              const ok = await this.openConfirm('Excluir Playlist', `Tem certeza que deseja excluir "${pl.name}"?`);
-              if (ok) {
-                state.playlists = state.playlists.filter(p => p.id !== pl.id);
-                Storage.savePlaylists();
-                this.renderSidebarPlaylists();
-                this.showToast('Playlist excluída.');
-                this.switchView('explore');
+            document.getElementById('btn-shuffle-pl')?.addEventListener('click', () => {
+              if (!pl.tracks.length) return;
+              const shuffled = [...pl.tracks];
+              for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
               }
+              AudioEngine.playNow(shuffled[0], shuffled);
+            });
+            document.getElementById('btn-rename-pl')?.addEventListener('click', () => {
+              const title = document.querySelector(`[data-playlist-header-title="${CSS.escape(pl.id)}"]`);
+              if (title) {
+                this.startInlineRename(title, pl, (name) => {
+                  titleEl.textContent = name || pl.name;
+                  this.renderSidebarPlaylists();
+                  this.renderMobilePlaylistsCards();
+                });
+              }
+            });
+            document.getElementById('btn-export-pl')?.addEventListener('click', () => {
+              if (Storage.exportPlaylistCSV(pl.id)) this.showToast('CSV da playlist exportado', 'success');
+            });
+            const deleteButton = document.getElementById('btn-delete-pl');
+            deleteButton?.addEventListener('click', () => {
+              if (deleteButton.dataset.confirmDelete !== '1') {
+                deleteButton.dataset.confirmDelete = '1';
+                deleteButton.querySelector('span').textContent = 'Confirmar excluir';
+                deleteButton.classList.add('bg-rose-500/20');
+                setTimeout(() => {
+                  if (deleteButton.isConnected) {
+                    deleteButton.dataset.confirmDelete = '0';
+                    const label = deleteButton.querySelector('span');
+                    if (label) label.textContent = 'Excluir';
+                    deleteButton.classList.remove('bg-rose-500/20');
+                  }
+                }, 3500);
+                return;
+              }
+              deleteButton.dataset.confirmDelete = '0';
+              state.playlists = state.playlists.filter(p => p.id !== pl.id);
+              Storage.savePlaylists();
+              this.renderSidebarPlaylists();
+              this.showToast('Playlist excluída.');
+              this.switchView('explore');
             });
 
             state.displayedTracks = pl.tracks;
@@ -2008,11 +2174,30 @@ import { renderTrackCard } from './ui/renderers.js';
           }
           container.innerHTML = state.playlists.map(pl => {
             const active = state.currentView === 'playlist-detail' && state.activePlaylistId === pl.id;
-            return `<button data-pl-id="${pl.id}" class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition ${active ? 'bg-white/15 text-white font-semibold' : 'text-white/70 hover:text-white hover:bg-white/5'}">
-              <span class="truncate pr-2">${this.escapeHtml(pl.name)}</span>
-              <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${pl.tracks.length}</span>
-            </button>`;
+            return `<div class="group flex items-center rounded-xl ${active ? 'bg-white/15' : 'hover:bg-white/5'}">
+              <button data-pl-id="${this.escapeHtml(pl.id)}" class="min-w-0 flex-1 flex items-center justify-between px-3 py-2 text-xs transition ${active ? 'text-white font-semibold' : 'text-white/70 hover:text-white'}">
+                <span class="truncate pr-2">${this.escapeHtml(pl.name)}</span>
+                <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${pl.tracks.length}</span>
+              </button>
+              <button data-sidebar-rename="${this.escapeHtml(pl.id)}" class="p-2 mr-1 rounded-lg text-white/35 hover:text-white hover:bg-white/10" title="Renomear">
+                <i data-lucide="pencil" class="w-3 h-3"></i>
+              </button>
+            </div>`;
           }).join('');
+
+          container.querySelectorAll('button[data-sidebar-rename]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.sidebarRename);
+              const row = button.closest('div');
+              const title = row?.querySelector('[data-pl-id] span');
+              if (!playlist || !title) return;
+              this.startInlineRename(title, playlist, () => {
+                this.renderSidebarPlaylists();
+                this.renderMobilePlaylistsCards();
+              });
+            });
+          });
 
           container.querySelectorAll('button[data-pl-id]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -2029,21 +2214,25 @@ import { renderTrackCard } from './ui/renderers.js';
             </div>`;
             return;
           }
-          container.innerHTML = state.playlists.map(pl => {
-            const cover = pl.tracks[0]?.artworkMedium || 'https://placehold.co/200x200/10131c/64748b?text=Playlist';
-            return `<div data-pl-id="${pl.id}" class="glass-card rounded-2xl p-3 flex items-center gap-3 cursor-pointer">
-              <img src="${this.escapeHtml(cover)}" alt="" class="w-14 h-14 rounded-xl object-cover border border-white/10 shrink-0" />
-              <div class="min-w-0 flex-1">
-                <h4 class="text-sm font-semibold text-white truncate">${this.escapeHtml(pl.name)}</h4>
-                <p class="text-xs text-white/50 mt-0.5">${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'}</p>
-              </div>
-              <i data-lucide="chevron-right" class="w-4 h-4 text-white/40"></i>
-            </div>`;
-          }).join('');
+          container.innerHTML = state.playlists.map(pl => renderPlaylistCard(pl)).join('');
           lucide.createIcons({ root: container });
 
+          container.querySelectorAll('[data-playlist-rename]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.playlistRename);
+              const title = container.querySelector(`[data-playlist-title="${CSS.escape(playlist.id)}"]`);
+              if (!playlist || !title) return;
+              this.startInlineRename(title, playlist, () => {
+                this.renderMobilePlaylistsCards();
+                this.renderSidebarPlaylists();
+              });
+            });
+          });
+
           container.querySelectorAll('[data-pl-id]').forEach(card => {
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (event) => {
+              if (event.target.closest('[data-playlist-rename]')) return;
               this.switchView('playlist-detail', card.getAttribute('data-pl-id'));
             });
           });
