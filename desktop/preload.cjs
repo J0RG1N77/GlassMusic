@@ -52,3 +52,9 @@ contextBridge.exposeInMainWorld('electronUpdater', {
 });
 
 contextBridge.exposeInMainWorld('glassMusicControls', mediaControls);
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  toggleMiniPlayer(enable) {
+    return ipcRenderer.invoke('player:toggle-mini', Boolean(enable));
+  }
+});

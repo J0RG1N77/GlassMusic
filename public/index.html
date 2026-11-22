@@ -76,6 +76,25 @@
     <div class="app-splash-title">Glass Music</div>
     <div class="app-splash-loader" aria-hidden="true"></div>
   </div>
+
+  <section id="mini-player-shell" class="mini-player-shell" aria-label="Mini-player Glass Music">
+    <button id="btn-mini-expand" class="mini-player-expand" type="button" title="Expandir modo completo">
+      <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+    </button>
+    <img id="mini-player-cover" class="mini-player-cover" src="./glassmusic.svg" alt="" />
+    <div class="mini-player-content">
+      <div class="mini-player-meta">
+        <div id="mini-player-title" class="mini-player-title">Glass Music</div>
+        <div id="mini-player-artist" class="mini-player-artist">Pronto para tocar</div>
+      </div>
+      <div class="mini-player-controls">
+        <button id="btn-mini-prev" type="button" title="Anterior"><i data-lucide="skip-back" class="w-4 h-4"></i></button>
+        <button id="btn-mini-play" type="button" title="Tocar / Pausar"><i id="icon-mini-play" data-lucide="play" class="w-4 h-4 fill-current"></i></button>
+        <button id="btn-mini-next" type="button" title="Próxima"><i data-lucide="skip-forward" class="w-4 h-4"></i></button>
+      </div>
+    </div>
+    <input id="mini-player-progress" class="mini-player-progress" type="range" min="0" max="100" step="0.1" value="0" aria-label="Progresso da música" />
+  </section>
   <!-- Elemento de Áudio Nativo HTML5 (Permite reprodução contínua em segundo plano no Android & iOS) -->
   <audio id="native-audio" preload="metadata" crossorigin="anonymous"></audio>
 
@@ -372,6 +391,9 @@
       </button>
       <button id="btn-desktop-expand" class="glass-chip p-2 rounded-xl text-white/75 hover:text-white" title="Modo Imersivo">
         <i data-lucide="maximize-2" class="w-4 h-4"></i>
+      </button>
+      <button id="btn-desktop-mini-player" class="hidden glass-chip p-2 rounded-xl text-white/75 hover:text-white" title="Mini-player">
+        <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
       </button>
     </div>
   </footer>

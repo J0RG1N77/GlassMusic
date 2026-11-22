@@ -80,3 +80,124 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-colo
     transform: translate3d(-1%, 3%, 0) scale(1.32) rotate(-0.5deg);
   }
 }
+
+.mini-player-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none !important;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 19px;
+  overflow: hidden;
+  color: white;
+  background:
+    linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(255, 255, 255, 0.055)),
+    rgba(7, 8, 12, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+body.is-mini-player > *:not(.mini-player-shell) {
+  display: none !important;
+}
+
+body.is-mini-player .mini-player-shell {
+  display: flex !important;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+
+.mini-player-shell button,
+.mini-player-shell input {
+  -webkit-app-region: no-drag;
+}
+
+.mini-player-cover {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+}
+
+.mini-player-content {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 24px;
+}
+
+.mini-player-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.mini-player-title,
+.mini-player-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-player-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.mini-player-artist {
+  margin-top: 3px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.mini-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.mini-player-controls button,
+.mini-player-expand {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.055);
+  cursor: pointer;
+}
+
+.mini-player-expand {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  z-index: 2;
+}
+
+.mini-player-progress {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 7px;
+  width: calc(100% - 24px);
+  height: 3px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}

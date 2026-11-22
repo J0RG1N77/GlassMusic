@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, screen, shell } from 'electron';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -8,6 +8,7 @@ const SERVER_PORT = 3001;
 const SERVER_URL = `http://localhost:${SERVER_PORT}`;
 
 let mainWindow;
+let savedWindowBounds = null;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { autoUpdater } = require('electron-updater');
@@ -152,6 +153,48 @@ async function checkForUpdates() {
 
 ipcMain.on('check-for-updates', () => {
   void checkForUpdates();
+});
+
+ipcMain.handle('player:toggle-mini', (_event, enable) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  if (Boolean(enable)) {
+    savedWindowBounds = mainWindow.isMaximized()
+      ? { x: 20, y: 20, width: 1200, height: 800 }
+      : mainWindow.getBounds();
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+
+    const workArea = screen.getDisplayMatching(savedWindowBounds).workArea;
+    const width = 360;
+    const height = 118;
+
+    mainWindow.setMinimumSize(width, height);
+    mainWindow.setContentSize(width, height);
+    const compactBounds = mainWindow.getBounds();
+    const x = workArea.x + workArea.width - compactBounds.width - 20;
+    const y = workArea.y + workArea.height - compactBounds.height - 20;
+    mainWindow.setPosition(x, y);
+    mainWindow.setResizable(false);
+    mainWindow.setAlwaysOnTop(true, 'floating');
+    return true;
+  }
+
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setResizable(true);
+  mainWindow.setMinimumSize(900, 620);
+
+  if (savedWindowBounds) {
+    mainWindow.setBounds(savedWindowBounds);
+  } else {
+    const { workArea } = screen.getPrimaryDisplay();
+    mainWindow.setBounds({
+      x: workArea.x + Math.round((workArea.width - 1200) / 2),
+      y: workArea.y + Math.round((workArea.height - 800) / 2),
+      width: 1200,
+      height: 800
+    });
+  }
+  return true;
 });
 
 async function waitForServer() {

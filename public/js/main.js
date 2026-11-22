@@ -87,6 +87,7 @@ import { renderPlaylistCard } from './ui/renderers.js';
         fullscreenTab: 'cover',      // 'cover' | 'lyrics'
         pendingTrackForPlaylist: null,
         activeAmbientSlot: 'a',
+        isMiniPlayer: false,
         audioContext: null,
         audioAnalyser: null,
         audioSource: null,
@@ -1092,6 +1093,9 @@ import { renderPlaylistCard } from './ui/renderers.js';
 
           // Sincroniza letra karaoke
           LyricsController.syncTime(current);
+
+          const miniProgress = document.getElementById('mini-player-progress');
+          if (miniProgress) miniProgress.value = String(pct);
         },
 
         recordHistory(track) {
@@ -1276,6 +1280,33 @@ import { renderPlaylistCard } from './ui/renderers.js';
          7. INTERFACE DO USUÁRIO, MODAIS & RENDERIZAÇÃO RESPONSIVA
          ====================================================================== */
       const UI = {
+        async setMiniPlayer(enabled) {
+          if (!window.electronAPI?.toggleMiniPlayer) return false;
+          try {
+            await window.electronAPI.toggleMiniPlayer(enabled);
+            state.isMiniPlayer = Boolean(enabled);
+            document.body.classList.toggle('is-mini-player', state.isMiniPlayer);
+            if (enabled) {
+              this.updateMiniPlayerFromCurrentTrack();
+            }
+            return true;
+          } catch (error) {
+            console.warn('Não foi possível alterar o modo mini-player:', error);
+            return false;
+          }
+        },
+
+        updateMiniPlayerFromCurrentTrack() {
+          if (!state.currentTrack) return;
+          const track = state.currentTrack;
+          const cover = document.getElementById('mini-player-cover');
+          const title = document.getElementById('mini-player-title');
+          const artist = document.getElementById('mini-player-artist');
+          if (cover) cover.src = track.artworkMedium || track.artworkLarge || './glassmusic.svg';
+          if (title) title.textContent = track.title;
+          if (artist) artist.textContent = track.artist;
+        },
+
         escapeHtml(str) {
           return String(str || '')
             .replace(/&/g, '&amp;')
@@ -2288,6 +2319,14 @@ import { renderPlaylistCard } from './ui/renderers.js';
           document.getElementById('fs-title').textContent = track.title;
           document.getElementById('fs-artist').textContent = `${track.artist} • ${track.album}`;
 
+          // Mini-player flutuante
+          const miniCover = document.getElementById('mini-player-cover');
+          const miniTitle = document.getElementById('mini-player-title');
+          const miniArtist = document.getElementById('mini-player-artist');
+          if (miniCover) miniCover.src = track.artworkMedium || track.artworkLarge || './glassmusic.svg';
+          if (miniTitle) miniTitle.textContent = track.title;
+          if (miniArtist) miniArtist.textContent = track.artist;
+
           this.updateNowPlayingFavIcons();
 
           // Destaca card ativo na grade
@@ -2311,6 +2350,12 @@ import { renderPlaylistCard } from './ui/renderers.js';
           setBtnIcon('btn-desktop-play', 'w-5 h-5');
           setBtnIcon('btn-mobile-mini-play', 'w-4 h-4');
           setBtnIcon('btn-fs-play', 'w-7 h-7');
+          const miniPlay = document.getElementById('btn-mini-play');
+          if (miniPlay) {
+            miniPlay.innerHTML = `<i id="icon-mini-play" data-lucide="${iconName}" class="w-4 h-4 fill-current"></i>`;
+            miniPlay.title = state.isPlaying ? 'Pausar' : 'Reproduzir';
+            lucide.createIcons({ root: miniPlay });
+          }
 
           const eq = document.getElementById('desktop-playing-eq');
           if (eq) eq.classList.toggle('paused', !state.isPlaying);
@@ -2499,6 +2544,23 @@ import { renderPlaylistCard } from './ui/renderers.js';
         document.getElementById('btn-desktop-play').addEventListener('click', () => AudioEngine.togglePlayPause());
         document.getElementById('btn-desktop-next').addEventListener('click', () => AudioEngine.nextTrack());
         document.getElementById('btn-desktop-prev').addEventListener('click', () => AudioEngine.prevTrack());
+        const miniPlayerButton = document.getElementById('btn-desktop-mini-player');
+        if (window.electronAPI?.toggleMiniPlayer && miniPlayerButton) {
+          miniPlayerButton.classList.remove('hidden');
+          miniPlayerButton.addEventListener('click', () => UI.setMiniPlayer(true));
+        }
+        document.getElementById('btn-mini-expand')?.addEventListener('click', () => UI.setMiniPlayer(false));
+        document.getElementById('btn-mini-prev')?.addEventListener('click', () => AudioEngine.prevTrack());
+        document.getElementById('btn-mini-play')?.addEventListener('click', () => AudioEngine.togglePlayPause());
+        document.getElementById('btn-mini-next')?.addEventListener('click', () => AudioEngine.nextTrack());
+        document.getElementById('mini-player-progress')?.addEventListener('input', (event) => {
+          AudioEngine.seekToPercent(parseFloat(event.target.value));
+        });
+        window.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && state.isMiniPlayer) {
+            void UI.setMiniPlayer(false);
+          }
+        });
         document.getElementById('btn-desktop-fav').addEventListener('click', () => UI.toggleFavorite(state.currentTrack));
         document.getElementById('btn-desktop-add-pl').addEventListener('click', () => UI.openAddToPlaylistModal(state.currentTrack));
         document.getElementById('btn-desktop-queue')?.addEventListener('click', () => UI.toggleQueueDrawer());
