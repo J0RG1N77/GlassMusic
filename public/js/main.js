@@ -7,7 +7,7 @@ import { fetchLyrics as fetchLrclibLyrics, parseLrc } from './services/lrclibSer
 import { storageService } from './services/storageService.js';
 import { escapeHtml, formatTime } from './ui/dom.js';
 import { bindActionDelegation } from './ui/events.js';
-import { renderTrackCard } from './ui/renderers.js';
+import { renderPlaylistCard } from './ui/renderers.js';
 
       /* ======================================================================
          1. CONFIGURAÇÕES, CONSTANTES & ESTADO GLOBAL
@@ -16,7 +16,9 @@ import { renderTrackCard } from './ui/renderers.js';
         SETTINGS: 'glass_music_settings_v1',
         FAVORITES: 'glass_music_favorites_v1',
         PLAYLISTS: 'glass_music_playlists_v1',
-        HISTORY: 'glass_music_history_v1'
+        HISTORY: 'glass_music_history_v1',
+        QUEUE: 'glass_music_queue_v1',
+        PRIORITY_QUEUE: 'glass_music_priority_queue_v1'
       };
 
       const DEFAULT_BACKEND_URL = typeof window !== 'undefined' && window.location.protocol === 'https:'
@@ -28,6 +30,10 @@ import { renderTrackCard } from './ui/renderers.js';
         glassAlpha: 0.44,
         glassBlur: 24,
         oledMode: false,
+        accentMode: 'manual',
+        atmosphereMode: 'soft',
+        frequencyVisualizer: false,
+        autoPlayEnabled: true,
         backendUrl: DEFAULT_BACKEND_URL
       };
 
@@ -41,13 +47,13 @@ import { renderTrackCard } from './ui/renderers.js';
       ];
 
       const DISCOVERY_CHIPS = [
-        { label: 'Em Alta Brasil', query: 'Top Hits Brasil' },
-        { label: 'Pop Internacional', query: 'The Weeknd Dua Lipa' },
-        { label: 'Lo-Fi & Chill', query: 'Lofi Beats Chill' },
-        { label: 'MPB & Bossa', query: 'Djavan Tim Maia MPB' },
-        { label: 'Eletrônica', query: 'Daft Punk Fred Again' },
-        { label: 'Rock Clássico', query: 'Coldplay Arctic Monkeys' },
-        { label: 'R&B / Soul', query: 'Frank Ocean SZA' }
+        { label: 'Em Alta Brasil', query: 'Top Hits Brasil', category: 'em-alta-brasil' },
+        { label: 'Pop Internacional', query: 'The Weeknd Dua Lipa', category: 'pop-internacional' },
+        { label: 'Lo-Fi & Chill', query: 'Lofi Beats Chill', category: 'lofi-chill' },
+        { label: 'Sertanejo', query: 'Sertanejo', category: 'sertanejo' },
+        { label: 'Eletrônica', query: 'Daft Punk Fred Again', category: 'eletronica' },
+        { label: 'Rock Clássico', query: 'Coldplay Arctic Monkeys', category: 'rock-classico' },
+        { label: 'R&B / Soul', query: 'Frank Ocean SZA', category: 'rb-soul' }
       ];
 
       const state = {
@@ -58,10 +64,16 @@ import { renderTrackCard } from './ui/renderers.js';
         currentView: 'explore',      // 'explore' | 'favorites' | 'history' | 'playlists' | 'playlist-detail'
         activePlaylistId: null,
         activeChipQuery: DISCOVERY_CHIPS[0].query,
+        activeDiscoveryCategory: DISCOVERY_CHIPS[0].category,
         displayedTracks: [],
         queue: [],
+        priorityQueue: [],
         queueIndex: -1,
         currentTrack: null,
+        isQueueOpen: false,
+        queueTab: 'queue',
+        autoPlayEnabled: true,
+        prefetchedRadioTrack: null,
         isPlaying: false,
         shuffle: false,
         repeatMode: 'off',           // 'off' | 'all' | 'one'
@@ -74,7 +86,12 @@ import { renderTrackCard } from './ui/renderers.js';
         fullscreenOpen: false,
         fullscreenTab: 'cover',      // 'cover' | 'lyrics'
         pendingTrackForPlaylist: null,
-        activeAmbientSlot: 'a'
+        activeAmbientSlot: 'a',
+        isMiniPlayer: false,
+        audioContext: null,
+        audioAnalyser: null,
+        audioSource: null,
+        audioAnimationFrame: null
       };
 
       /* ======================================================================
@@ -86,6 +103,7 @@ import { renderTrackCard } from './ui/renderers.js';
             const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEYS.SETTINGS) || 'null');
             if (savedSettings) {
               state.settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+              state.autoPlayEnabled = state.settings.autoPlayEnabled !== false;
               if (window.location.protocol === 'https:' && /^https?:\/\/localhost(?::\d+)?$/i.test(state.settings.backendUrl)) {
                 state.settings.backendUrl = DEFAULT_BACKEND_URL;
                 this.saveSettings();
@@ -94,6 +112,8 @@ import { renderTrackCard } from './ui/renderers.js';
             state.favorites = JSON.parse(localStorage.getItem(STORAGE_KEYS.FAVORITES) || '[]');
             state.playlists = JSON.parse(localStorage.getItem(STORAGE_KEYS.PLAYLISTS) || '[]');
             state.history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) || '[]');
+            state.queue = JSON.parse(localStorage.getItem(STORAGE_KEYS.QUEUE) || '[]');
+            state.priorityQueue = JSON.parse(localStorage.getItem(STORAGE_KEYS.PRIORITY_QUEUE) || '[]');
           } catch (err) {
             console.warn('Falha ao carregar dados locais:', err);
           }
@@ -121,6 +141,46 @@ import { renderTrackCard } from './ui/renderers.js';
           try {
             localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(state.history.slice(0, 60)));
           } catch (e) {}
+        },
+
+        saveQueue() {
+          try {
+            localStorage.setItem(STORAGE_KEYS.QUEUE, JSON.stringify(state.queue));
+            localStorage.setItem(STORAGE_KEYS.PRIORITY_QUEUE, JSON.stringify(state.priorityQueue));
+          } catch (e) {}
+        },
+
+        renamePlaylist(playlistId, newName) {
+          const playlist = storageService.renamePlaylist(playlistId, newName);
+          if (!playlist) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist) localPlaylist.name = playlist.name;
+          this.savePlaylists();
+          return true;
+        },
+
+        removeTrackFromPlaylist(playlistId, trackIndex) {
+          const removed = storageService.removeTrackFromPlaylist(playlistId, trackIndex);
+          if (!removed) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist?.tracks) localPlaylist.tracks.splice(trackIndex, 1);
+          this.savePlaylists();
+          return true;
+        },
+
+        moveTrackInPlaylist(playlistId, fromIndex, toIndex) {
+          if (!storageService.moveTrackInPlaylist(playlistId, fromIndex, toIndex)) return false;
+          const localPlaylist = state.playlists.find((item) => item.id === playlistId);
+          if (localPlaylist?.tracks) {
+            const [track] = localPlaylist.tracks.splice(fromIndex, 1);
+            localPlaylist.tracks.splice(toIndex, 0, track);
+          }
+          this.savePlaylists();
+          return true;
+        },
+
+        exportPlaylistCSV(playlistId) {
+          return storageService.exportPlaylistCSV(playlistId);
         },
 
         // Sanitiza metadados da faixa antes de salvar (nunca persiste URLs de stream temporárias)
@@ -155,7 +215,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
         applyAll() {
           const root = document.documentElement;
-          const { accentColor, glassAlpha, glassBlur, oledMode } = state.settings;
+          const { accentColor, glassAlpha, glassBlur, oledMode, accentMode, atmosphereMode, frequencyVisualizer } = state.settings;
 
           root.style.setProperty('--accent-color', accentColor);
           root.style.setProperty('--accent-rgb', this.hexToRgb(accentColor));
@@ -169,6 +229,8 @@ import { renderTrackCard } from './ui/renderers.js';
           } else {
             backdrop.classList.remove('oled-hidden');
           }
+          backdrop.classList.toggle('atmosphere-immersive', !oledMode && atmosphereMode === 'immersive');
+          backdrop.classList.toggle('atmosphere-aurora', !oledMode && atmosphereMode === 'aurora');
 
           // Atualiza visual dos controles do painel de personalização
           const alphaPct = Math.round(glassAlpha * 100);
@@ -200,6 +262,32 @@ import { renderTrackCard } from './ui/renderers.js';
             toggleKnob.style.transform = 'translateX(0px)';
           }
 
+          document.querySelectorAll('[data-atmosphere]').forEach(button => {
+            const active = button.dataset.atmosphere === atmosphereMode;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+            button.disabled = oledMode;
+          });
+          document.getElementById('atmosphere-options')?.toggleAttribute('disabled', oledMode);
+          document.getElementById('atmosphere-options')?.classList.toggle('opacity-40', oledMode);
+          document.getElementById('atmosphere-status').textContent = oledMode
+            ? 'Ativa apenas com o modo OLED desligado'
+            : 'Ativa enquanto o modo OLED estiver desligado';
+
+          const autoBtn = document.getElementById('btn-accent-auto');
+          if (autoBtn) {
+            autoBtn.classList.toggle('active', accentMode === 'auto');
+            autoBtn.setAttribute('aria-pressed', String(accentMode === 'auto'));
+          }
+
+          const visualizerBtn = document.getElementById('toggle-frequency-visualizer');
+          const visualizerKnob = document.getElementById('toggle-frequency-knob');
+          if (visualizerBtn) {
+            visualizerBtn.setAttribute('aria-checked', String(frequencyVisualizer));
+            visualizerBtn.style.backgroundColor = frequencyVisualizer ? accentColor : 'rgba(255,255,255,0.16)';
+            visualizerKnob.style.transform = frequencyVisualizer ? 'translateX(20px)' : 'translateX(0px)';
+          }
+
           // Atualiza preenchimento dos sliders de progresso e volume
           this.updateSliderFill(document.getElementById('desktop-progress'));
           this.updateSliderFill(document.getElementById('desktop-volume'));
@@ -218,6 +306,9 @@ import { renderTrackCard } from './ui/renderers.js';
         // Crossfade suave da capa 1000x1000 desfocada no plano de fundo
         setAmbientArtwork(url) {
           if (!url) return;
+          if (state.settings.accentMode === 'auto') {
+            this.extractDominantAccent(url);
+          }
           const imgA = document.getElementById('ambient-img-a');
           const imgB = document.getElementById('ambient-img-b');
 
@@ -240,6 +331,121 @@ import { renderTrackCard } from './ui/renderers.js';
               state.activeAmbientSlot = 'a';
             };
           }
+        },
+
+        async extractDominantAccent(url) {
+          try {
+            if (!url) throw new Error('Capa indisponível');
+            let imageUrl = url;
+            if (/^https?:\/\//i.test(url)) {
+              const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+              imageUrl = `${baseUrl}/api/image-proxy?url=${encodeURIComponent(url)}`;
+            }
+            const image = new Image();
+            image.crossOrigin = 'anonymous';
+            image.src = imageUrl;
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            context.drawImage(image, 0, 0, 64, 64);
+            const pixels = context.getImageData(0, 0, 64, 64).data;
+            const colors = new Map();
+            for (let i = 0; i < pixels.length; i += 16) {
+              const r = pixels[i];
+              const g = pixels[i + 1];
+              const b = pixels[i + 2];
+              const max = Math.max(r, g, b);
+              const min = Math.min(r, g, b);
+              const saturation = max === 0 ? 0 : (max - min) / max;
+              const brightness = (r + g + b) / 765;
+              if (max < 35 || brightness > 0.92 || saturation < 0.18) continue;
+              const key = `${r >> 4},${g >> 4},${b >> 4}`;
+              const score = saturation * 3 + (1 - Math.abs(brightness - 0.48));
+              const entry = colors.get(key) || { r: 0, g: 0, b: 0, count: 0, score: 0 };
+              entry.r += r;
+              entry.g += g;
+              entry.b += b;
+              entry.count += 1;
+              entry.score += score;
+              colors.set(key, entry);
+            }
+            let best = null;
+            colors.forEach((entry) => {
+              if (!best || entry.score > best.score) best = entry;
+            });
+            if (!best) return;
+            if (!best.count) return;
+            const rq = best.r / best.count;
+            const gq = best.g / best.count;
+            const bq = best.b / best.count;
+            const hex = `#${Math.max(0, Math.min(255, Math.round(rq))).toString(16).padStart(2, '0')}${Math.max(0, Math.min(255, Math.round(gq))).toString(16).padStart(2, '0')}${Math.max(0, Math.min(255, Math.round(bq))).toString(16).padStart(2, '0')}`;
+            if (state.settings.accentMode === 'auto') {
+              state.settings.accentColor = hex;
+              Storage.saveSettings();
+              this.applyAll();
+            }
+          } catch (error) {
+            console.warn('Não foi possível extrair a cor da capa:', error.message);
+            if (state.settings.accentMode === 'auto') {
+              state.settings.accentColor = DEFAULT_SETTINGS.accentColor;
+              Storage.saveSettings();
+              this.applyAll();
+            }
+          }
+        },
+
+        initAudioVisualizer() {
+          if (!state.settings.frequencyVisualizer) {
+            const canvas = document.getElementById('audio-spectrum');
+            if (canvas) canvas.classList.add('opacity-0');
+            if (state.audioAnimationFrame) cancelAnimationFrame(state.audioAnimationFrame);
+            return;
+          }
+          if (!state.audioContext) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            state.audioContext = new AudioContext();
+            state.audioAnalyser = state.audioContext.createAnalyser();
+            state.audioAnalyser.fftSize = 64;
+            state.audioAnalyser.smoothingTimeConstant = 0.82;
+            state.audioSource = state.audioContext.createMediaElementSource(audio);
+            state.audioSource.connect(state.audioAnalyser);
+            state.audioAnalyser.connect(state.audioContext.destination);
+          }
+          if (state.audioContext.state === 'suspended') state.audioContext.resume();
+          const canvas = document.getElementById('audio-spectrum');
+          if (canvas) canvas.classList.remove('opacity-0');
+          this.drawAudioVisualizer();
+        },
+
+        drawAudioVisualizer() {
+          if (!state.settings.frequencyVisualizer || !state.audioAnalyser) return;
+          const canvas = document.getElementById('audio-spectrum');
+          if (!canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const ratio = window.devicePixelRatio || 1;
+          if (canvas.width !== Math.round(rect.width * ratio) || canvas.height !== Math.round(rect.height * ratio)) {
+            canvas.width = Math.round(rect.width * ratio);
+            canvas.height = Math.round(rect.height * ratio);
+          }
+          const context = canvas.getContext('2d');
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          const data = new Uint8Array(state.audioAnalyser.frequencyBinCount);
+          state.audioAnalyser.getByteFrequencyData(data);
+          const barCount = 38;
+          const gap = 2 * ratio;
+          const barWidth = Math.max(1, (canvas.width - gap * (barCount - 1)) / barCount);
+          context.fillStyle = state.settings.accentColor;
+          for (let i = 0; i < barCount; i++) {
+            const value = data[Math.floor(i * data.length / barCount)] / 255;
+            const height = Math.max(2 * ratio, value * canvas.height * 0.85);
+            const x = i * (barWidth + gap);
+            context.globalAlpha = 0.28 + value * 0.42;
+            context.fillRect(x, canvas.height - height, barWidth, height);
+          }
+          state.audioAnimationFrame = requestAnimationFrame(() => this.drawAudioVisualizer());
         }
       };
 
@@ -247,28 +453,122 @@ import { renderTrackCard } from './ui/renderers.js';
          4. SERVIÇOS DE API: ITUNES SEARCH, LRCLIB & PROXY NODE.JS
          ====================================================================== */
       const ApiService = {
+        async prefetchTrack(track) {
+          if (!track?.title || !track?.artist) return;
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          await fetch(`${baseUrl}/api/prefetch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: track.title, artist: track.artist }),
+            cache: 'no-store'
+          }).catch(() => {});
+        },
+
+        async importSpotifyPlaylist(url) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          const response = await fetch(`${baseUrl}/api/import-playlist`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.message || data.error || 'Não foi possível importar a playlist');
+          return data;
+        },
+
+        async fetchAutoplay(artist, title, exclude = []) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          const params = new URLSearchParams({
+            artist,
+            title,
+            exclude: Array.isArray(exclude) ? exclude.join(',') : ''
+          });
+          const response = await fetch(`${baseUrl}/api/autoplay?${params.toString()}`, {
+            cache: 'no-store'
+          });
+          if (!response.ok) throw new Error('Não foi possível carregar a Rádio da Faixa');
+          const data = await response.json();
+          return Array.isArray(data.tracks) ? data.tracks : [];
+        },
+
+        async discoverTracks(category) {
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          try {
+            const response = await fetch(`${baseUrl}/api/discover?category=${encodeURIComponent(category)}`, {
+              cache: 'no-store'
+            });
+            if (!response.ok) throw new Error('Erro ao consultar catálogo dinâmico');
+            const data = await response.json();
+            if (Array.isArray(data.tracks) && data.tracks.length > 0) return data.tracks;
+          } catch (error) {
+            console.warn('Catálogo dinâmico indisponível:', error.message);
+          }
+          const fallbackQueries = {
+            'em-alta-brasil': 'Top Hits Brasil',
+            'pop-internacional': 'The Weeknd Dua Lipa',
+            'lofi-chill': 'Lofi Beats Chill',
+            'sertanejo': 'Sertanejo',
+            'eletronica': 'Daft Punk Fred Again',
+            'rock-classico': 'Coldplay Arctic Monkeys',
+            'rb-soul': 'Frank Ocean SZA'
+          };
+          return this.searchTracks(fallbackQueries[category] || 'Top Hits', 25);
+        },
+
         // Busca metadados oficiais no iTunes Search API (sem necessidade de chave)
         async searchTracks(query, limit = 25) {
-          const url = `https://itunes.apple.com/search?media=music&entity=song&country=BR&limit=${limit}&term=${encodeURIComponent(query)}`;
-          const response = await fetch(url);
-          if (!response.ok) throw new Error('Erro ao consultar catálogo iTunes');
-          const data = await response.json();
+          const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
+          try {
+            const response = await fetch(
+              `${baseUrl}/api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+              { cache: 'no-store' }
+            );
+            if (response.ok) {
+              const data = await response.json();
+              if (Array.isArray(data.tracks) && data.tracks.length > 0) return data.tracks;
+            }
+          } catch (error) {
+            console.warn('Busca combinada indisponível:', error.message);
+          }
 
-          return (data.results || [])
-            .filter(item => item.trackId && item.trackName && item.artistName)
-            .map(item => {
+          const encodedQuery = encodeURIComponent(query);
+          const responses = await Promise.allSettled([
+            fetch(`https://itunes.apple.com/search?country=US&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`),
+            fetch(`https://itunes.apple.com/search?country=BR&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`)
+          ]);
+          const tracks = [];
+          const seen = new Set();
+          for (const result of responses) {
+            if (result.status !== 'fulfilled' || !result.value.ok) continue;
+            const data = await result.value.json();
+            for (const item of data.results || []) {
+              if (!item.trackId || !item.trackName || !item.artistName) continue;
+              const key = `${item.artistName}::${item.trackName}`
+                .normalize('NFKD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLocaleLowerCase('pt-BR')
+                .replace(/[^\p{L}\p{N}]+/gu, ' ')
+                .trim();
+              if (seen.has(key)) continue;
+              seen.add(key);
               const baseArt = item.artworkUrl100 || '';
-              return {
-                trackId: item.trackId,
+              tracks.push({
+                id: `itunes-${item.trackId}`,
+                trackId: `itunes-${item.trackId}`,
                 title: item.trackName,
                 artist: item.artistName,
                 album: item.collectionName || 'Single',
                 durationSec: Math.max(1, Math.round((item.trackTimeMillis || 30000) / 1000)),
                 artworkMedium: baseArt ? baseArt.replace('100x100bb', '600x600bb') : 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
                 artworkLarge: baseArt ? baseArt.replace('100x100bb', '1000x1000bb') : 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
-                previewUrl: item.previewUrl || ''
-              };
-            });
+                previewUrl: item.previewUrl || '',
+                explicit: Boolean(item.trackExplicitness === 'explicit' || item.contentAdvisoryRating === 'Explicit')
+              });
+              if (tracks.length >= limit) break;
+            }
+            if (tracks.length >= limit) break;
+          }
+          return tracks;
         },
 
         // Consulta LRCLIB para obter letras sincronizadas (LRC) ou estáticas
@@ -373,23 +673,38 @@ import { renderTrackCard } from './ui/renderers.js';
       const audio = document.getElementById('native-audio');
 
       const AudioEngine = {
+        mediaControlActionsRef: { current: {} },
+
+        updateMediaControlActions() {
+          this.mediaControlActionsRef.current = {
+            prev: () => this.prevTrack(),
+            'toggle-play': () => this.togglePlayPause(),
+            next: () => this.nextTrack()
+          };
+        },
+
         init() {
           audio.volume = 0.85;
+          ThemeEngine.initAudioVisualizer();
+          this.updateMediaControlActions();
 
           audio.addEventListener('play', () => {
             state.isPlaying = true;
+            window.glassMusicControls?.sendPlaybackState(true);
             UI.updatePlayStateUI();
             this.updateMediaSessionPlaybackState();
           });
 
           audio.addEventListener('pause', () => {
             state.isPlaying = false;
+            window.glassMusicControls?.sendPlaybackState(false);
             UI.updatePlayStateUI();
             this.updateMediaSessionPlaybackState();
           });
 
           audio.addEventListener('timeupdate', () => {
             this.handleProgressUpdate();
+            this.prefetchNextTrack();
           });
 
           audio.addEventListener('loadedmetadata', () => {
@@ -402,8 +717,15 @@ import { renderTrackCard } from './ui/renderers.js';
               audio.currentTime = 0;
               audio.play().catch(() => {});
             } else {
-              this.nextTrack(true);
+              this.handleNextTrack(true);
             }
+          });
+
+          const mediaControls = window.glassMusicControls
+            || window.electronUpdater
+            || window.glassMusicUpdater;
+          mediaControls?.onMediaControl?.((action) => {
+            this.mediaControlActionsRef.current[action]?.();
           });
 
           this.setupMediaSessionHandlers();
@@ -414,26 +736,27 @@ import { renderTrackCard } from './ui/renderers.js';
           if (!track) return;
 
           if (Array.isArray(queueList) && queueList.length > 0) {
-            state.queue = [...queueList];
+            state.queue = [...queueList].filter((t, index, list) => (
+              t.trackId !== track.trackId
+              && list.findIndex(item => item.trackId === t.trackId) === index
+            ));
           }
-          const idx = state.queue.findIndex(t => t.trackId === track.trackId);
-          if (idx !== -1) {
-            state.queueIndex = idx;
-          } else {
-            state.queue.unshift(track);
-            state.queueIndex = 0;
+          if (state.currentTrack && state.currentTrack.trackId !== track.trackId) {
+            const previous = Storage.sanitizeTrackMetadata(state.currentTrack);
+            state.history = [previous, ...state.history.filter(t => t.trackId !== previous.trackId)].slice(0, 60);
+            Storage.saveHistory();
           }
+          state.queueIndex = state.queue.findIndex(t => t.trackId === track.trackId);
 
           state.currentTrack = track;
+          state.prefetchedRadioTrack = null;
+          this.prefetchedTrackId = null;
           state.activeLyricIndex = -1;
 
           // Atualiza interface visual & iluminação ambiente imediatamente
           UI.renderNowPlaying(track);
           ThemeEngine.setAmbientArtwork(track.artworkLarge);
           this.updateMediaSessionMetadata(track);
-
-          // Salva apenas metadados no histórico local
-          this.recordHistory(track);
 
           // Carrega letras sincronizadas em paralelo
           LyricsController.loadForTrack(track);
@@ -478,6 +801,216 @@ import { renderTrackCard } from './ui/renderers.js';
           this.startStream(proxyStreamUrl, 'proxy');
         },
 
+        playNow(track, contextList = []) {
+          if (!track) return;
+          const trackId = track.trackId || track.id || track.videoId;
+          if (!trackId) return;
+
+          state.priorityQueue = state.priorityQueue.filter(t => (t.trackId || t.id || t.videoId) !== trackId);
+          state.queue = state.queue.filter(t => (t.trackId || t.id || t.videoId) !== trackId);
+          Storage.saveQueue();
+
+          const context = Array.isArray(contextList)
+            ? contextList.filter((t, index, list) => {
+              const id = t.trackId || t.id || t.videoId;
+              return id && id !== trackId
+                && list.findIndex(item => (item.trackId || item.id || item.videoId) === id) === index;
+            })
+            : [];
+          void this.playTrack(track, context.length > 0 ? context : null);
+        },
+
+        playNext(track) {
+          if (!track) return;
+          const clean = Storage.sanitizeTrackMetadata(track);
+          state.priorityQueue = [
+            clean,
+            ...state.priorityQueue.filter(t => t.trackId !== clean.trackId)
+          ];
+          state.queue = state.queue.filter(t => t.trackId !== clean.trackId);
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Tocar a seguir', 'success');
+        },
+
+        addToQueue(track) {
+          if (!track) return;
+          const clean = Storage.sanitizeTrackMetadata(track);
+          if (clean.trackId === state.currentTrack?.trackId) return;
+          state.queue = [...state.queue.filter(t => t.trackId !== clean.trackId), clean];
+          state.priorityQueue = state.priorityQueue.filter(t => t.trackId !== clean.trackId);
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Adicionada à fila', 'success');
+        },
+
+        async prefetchNextTrack() {
+          if (!state.currentTrack || !audio.duration || isNaN(audio.duration)) return;
+          if (audio.duration <= 30 || (audio.duration - audio.currentTime) > 25) return;
+
+          const trackId = state.currentTrack.trackId
+            || state.currentTrack.id
+            || state.currentTrack.videoId;
+          if (!trackId || this.prefetchedTrackId === trackId) return;
+          this.prefetchedTrackId = trackId;
+
+          let nextTrack = state.priorityQueue[0] || state.queue[0] || null;
+          if (!nextTrack) {
+            if (!state.autoPlayEnabled || state.repeatMode === 'all' || state.repeatMode === 'one') return;
+            if (this.autoplayPrefetchLoading) return;
+            this.autoplayPrefetchLoading = true;
+            try {
+              const exclude = [
+                state.currentTrack.title,
+                state.currentTrack.trackId,
+                state.currentTrack.artist,
+                ...state.history.map((item) => item.title)
+              ].filter(Boolean);
+              const recommendations = await ApiService.fetchAutoplay(
+                state.currentTrack.artist,
+                state.currentTrack.title,
+                exclude
+              );
+              nextTrack = recommendations[0] || null;
+              if (!nextTrack) return;
+              nextTrack = Storage.sanitizeTrackMetadata({
+                ...nextTrack,
+                trackId: nextTrack.trackId || `radio-${nextTrack.artist}-${nextTrack.title}`,
+                artworkMedium: nextTrack.artworkMedium || nextTrack.cover,
+                artworkLarge: nextTrack.artworkLarge || nextTrack.cover
+              });
+              state.prefetchedRadioTrack = nextTrack;
+            } catch (error) {
+              console.warn('Falha ao pré-carregar recomendação:', error.message);
+              return;
+            } finally {
+              this.autoplayPrefetchLoading = false;
+            }
+          }
+
+          await ApiService.prefetchTrack(nextTrack);
+        },
+
+        async ensureAutoplayQueue(track, playFirst = false) {
+          if (!state.autoPlayEnabled || state.repeatMode === 'all' || state.repeatMode === 'one') return;
+          if (!track?.artist || !track?.title) return;
+          if (state.priorityQueue.length > 0 || state.queue.length > 0) return;
+          if (this.autoplayLoading) return;
+
+          this.autoplayLoading = true;
+          try {
+            if (state.prefetchedRadioTrack) {
+              const cleanTrack = state.prefetchedRadioTrack;
+              state.prefetchedRadioTrack = null;
+              if (playFirst) this.playNow(cleanTrack);
+              return;
+            }
+            const exclude = [
+              track.title,
+              track.trackId,
+              track.artist,
+              ...state.history.map((item) => item.title)
+            ].filter(Boolean);
+            const recommendations = await ApiService.fetchAutoplay(track.artist, track.title, exclude);
+            if (!state.autoPlayEnabled) return;
+            const firstTrack = recommendations[0];
+            if (!firstTrack) return;
+            const cleanTrack = Storage.sanitizeTrackMetadata({
+              ...firstTrack,
+              trackId: firstTrack.trackId || `radio-${firstTrack.artist}-${firstTrack.title}`,
+              artworkMedium: firstTrack.artworkMedium || firstTrack.cover,
+              artworkLarge: firstTrack.artworkLarge || firstTrack.cover
+            });
+            UI.showToast('Próxima da Rádio da Faixa', 'success');
+            if (playFirst) this.playNow(cleanTrack);
+          } catch (error) {
+            console.warn('Falha ao carregar Rádio da Faixa:', error.message);
+          } finally {
+            this.autoplayLoading = false;
+          }
+        },
+
+        handleNextTrack(autoAdvance = false) {
+          let nextTrack = null;
+          if (state.priorityQueue.length > 0) {
+            nextTrack = state.priorityQueue.shift();
+          } else if (state.queue.length > 0) {
+            nextTrack = state.queue.shift();
+          }
+
+          if (nextTrack) {
+            Storage.saveQueue();
+            this.playTrack(nextTrack);
+            return;
+          }
+
+          if (state.autoPlayEnabled && state.repeatMode !== 'all' && state.repeatMode !== 'one') {
+            if (this.autoplayLoading) {
+              setTimeout(() => this.handleNextTrack(true), 300);
+              return;
+            }
+            void this.ensureAutoplayQueue(state.currentTrack, true);
+            return;
+          }
+
+          if (state.repeatMode === 'all' || (!autoAdvance && state.queue.length === 0)) {
+            if (state.queueIndex >= 0 && state.displayedTracks?.length > 0) {
+              this.playTrack(state.displayedTracks[0], state.displayedTracks);
+            }
+          }
+        },
+
+        handlePreviousTrack() {
+          if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+            return;
+          }
+          const previous = state.history.find(track => track.trackId !== state.currentTrack?.trackId);
+          if (!previous) return;
+          state.history = state.history.filter(track => track.trackId !== previous.trackId);
+          Storage.saveHistory();
+          this.playTrack(previous);
+        },
+
+        removeFromQueue(id, listType = 'queue', index = -1) {
+          const targetList = listType === 'priority' ? state.priorityQueue : state.queue;
+          if (index >= 0 && index < targetList.length) {
+            targetList.splice(index, 1);
+            Storage.saveQueue();
+            UI.renderQueueDrawer();
+            return;
+          }
+          if (listType === 'priority') {
+            state.priorityQueue = state.priorityQueue.filter(track =>
+              (track.trackId || track.id || track.videoId) !== id
+            );
+          } else {
+            state.queue = state.queue.filter(track =>
+              (track.trackId || track.id || track.videoId) !== id
+            );
+          }
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+        },
+
+        reorderQueue(fromIndex, toIndex) {
+          if (fromIndex < 0 || toIndex < 0 || fromIndex >= state.queue.length || toIndex >= state.queue.length) return;
+          const reordered = [...state.queue];
+          const [track] = reordered.splice(fromIndex, 1);
+          reordered.splice(toIndex, 0, track);
+          state.queue = reordered;
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+        },
+
+        clearQueue() {
+          state.priorityQueue = [];
+          state.queue = [];
+          Storage.saveQueue();
+          UI.renderQueueDrawer();
+          UI.showToast('Fila limpa');
+        },
+
         startStream(url, sourceType) {
           state.activeStreamSource = sourceType;
           UI.updateTechnicalBadge();
@@ -512,37 +1045,11 @@ import { renderTrackCard } from './ui/renderers.js';
         },
 
         nextTrack(autoAdvance = false) {
-          if (state.queue.length === 0) return;
-
-          if (state.shuffle && state.queue.length > 1) {
-            let nextIdx = state.queueIndex;
-            while (nextIdx === state.queueIndex) {
-              nextIdx = Math.floor(Math.random() * state.queue.length);
-            }
-            this.playTrack(state.queue[nextIdx]);
-            return;
-          }
-
-          const nextIdx = state.queueIndex + 1;
-          if (nextIdx < state.queue.length) {
-            this.playTrack(state.queue[nextIdx]);
-          } else if (state.repeatMode === 'all' || !autoAdvance) {
-            this.playTrack(state.queue[0]);
-          }
+          this.handleNextTrack(autoAdvance);
         },
 
         prevTrack() {
-          if (state.queue.length === 0) return;
-          if (audio.currentTime > 4) {
-            audio.currentTime = 0;
-            return;
-          }
-          const prevIdx = state.queueIndex - 1;
-          if (prevIdx >= 0) {
-            this.playTrack(state.queue[prevIdx]);
-          } else {
-            this.playTrack(state.queue[state.queue.length - 1]);
-          }
+          this.handlePreviousTrack();
         },
 
         seekToPercent(pct) {
@@ -586,6 +1093,9 @@ import { renderTrackCard } from './ui/renderers.js';
 
           // Sincroniza letra karaoke
           LyricsController.syncTime(current);
+
+          const miniProgress = document.getElementById('mini-player-progress');
+          if (miniProgress) miniProgress.value = String(pct);
         },
 
         recordHistory(track) {
@@ -770,12 +1280,78 @@ import { renderTrackCard } from './ui/renderers.js';
          7. INTERFACE DO USUÁRIO, MODAIS & RENDERIZAÇÃO RESPONSIVA
          ====================================================================== */
       const UI = {
+        async setMiniPlayer(enabled) {
+          if (!window.electronAPI?.toggleMiniPlayer) return false;
+          try {
+            await window.electronAPI.toggleMiniPlayer(enabled);
+            state.isMiniPlayer = Boolean(enabled);
+            document.body.classList.toggle('is-mini-player', state.isMiniPlayer);
+            if (enabled) {
+              this.updateMiniPlayerFromCurrentTrack();
+            }
+            return true;
+          } catch (error) {
+            console.warn('Não foi possível alterar o modo mini-player:', error);
+            return false;
+          }
+        },
+
+        updateMiniPlayerFromCurrentTrack() {
+          if (!state.currentTrack) return;
+          const track = state.currentTrack;
+          const cover = document.getElementById('mini-player-cover');
+          const title = document.getElementById('mini-player-title');
+          const artist = document.getElementById('mini-player-artist');
+          if (cover) cover.src = track.artworkMedium || track.artworkLarge || './glassmusic.svg';
+          if (title) title.textContent = track.title;
+          if (artist) artist.textContent = track.artist;
+        },
+
         escapeHtml(str) {
           return String(str || '')
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+        },
+
+        startInlineRename(titleElement, playlist, onRenamed) {
+          if (!titleElement || !playlist) return;
+          const originalName = playlist.name;
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.value = originalName;
+          input.className = 'w-full max-w-md bg-black/35 text-white border border-white/20 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-white/40';
+          titleElement.replaceChildren(input);
+          input.focus();
+          input.select();
+
+          let finished = false;
+          const finish = (save) => {
+            if (finished) return;
+            finished = true;
+            let resolvedName = originalName;
+            if (save) {
+              const newName = input.value.trim();
+              if (newName) {
+                Storage.renamePlaylist(playlist.id, newName);
+                resolvedName = newName;
+              }
+            }
+            if (typeof onRenamed === 'function') onRenamed(resolvedName);
+          };
+
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              input.blur();
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              finish(false);
+              input.blur();
+            }
+          });
+          input.addEventListener('blur', () => finish(true));
         },
 
         formatTime(seconds) {
@@ -804,6 +1380,343 @@ import { renderTrackCard } from './ui/renderers.js';
           }, 3400);
         },
 
+        updateQueueBadge() {
+          const count = state.priorityQueue.length + state.queue.length;
+          ['queue-count-desktop', 'queue-count-mobile'].forEach(id => {
+            const badge = document.getElementById(id);
+            if (!badge) return;
+            badge.textContent = String(count);
+            badge.classList.toggle('hidden', count === 0);
+            badge.classList.toggle('flex', count > 0);
+          });
+        },
+
+        toggleQueueDrawer(forceOpen = null) {
+          state.isQueueOpen = typeof forceOpen === 'boolean' ? forceOpen : !state.isQueueOpen;
+          document.getElementById('queue-drawer').classList.toggle('open', state.isQueueOpen);
+          document.getElementById('queue-backdrop').classList.toggle('open', state.isQueueOpen);
+          if (state.isQueueOpen) this.renderQueueDrawer();
+        },
+
+        renderQueueDrawer() {
+          this.updateQueueBadge();
+          const autoplayToggle = document.getElementById('toggle-autoplay-radio');
+          const autoplayKnob = document.getElementById('toggle-autoplay-knob');
+          if (autoplayToggle) {
+            autoplayToggle.setAttribute('aria-checked', String(state.autoPlayEnabled));
+            if (autoplayToggle.lastElementChild) {
+              autoplayToggle.lastElementChild.style.backgroundColor =
+                state.autoPlayEnabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.16)';
+            }
+          }
+          if (autoplayKnob) {
+            autoplayKnob.style.transform = state.autoPlayEnabled
+              ? 'translateX(20px)'
+              : 'translateX(0px)';
+          }
+          document.querySelectorAll('[data-queue-tab]').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.queueTab === state.queueTab);
+          });
+          const content = document.getElementById('queue-drawer-content');
+          if (!content) return;
+
+          if (state.queueTab === 'history') {
+            content.innerHTML = state.history.length
+              ? state.history.map((track, index) => `
+                  <div class="queue-track-row flex items-center gap-3 px-2 py-2 rounded-2xl hover:bg-white/[0.06] mb-1">
+                    <img src="${this.escapeHtml(track.artworkMedium)}" class="w-11 h-11 rounded-xl object-cover border border-white/10" alt="">
+                    <button data-history-play="${this.escapeHtml(track.trackId)}" class="min-w-0 flex-1 text-left">
+                      <p class="text-xs font-semibold text-white truncate">${this.escapeHtml(track.title)}</p>
+                      <p class="text-[11px] text-white/45 truncate mt-0.5">${this.escapeHtml(track.artist)}</p>
+                    </button>
+                    <button data-history-remove="${this.escapeHtml(track.trackId)}" class="p-2 rounded-lg text-white/35 hover:text-white" title="Remover do histórico">
+                      <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    </button>
+                  </div>`).join('')
+              : '<div class="text-center text-xs text-white/45 py-12">Nenhuma música no histórico.</div>';
+            lucide.createIcons({ root: content });
+            content.querySelectorAll('[data-history-play]').forEach(button => {
+              button.addEventListener('click', () => {
+                const track = state.history.find(t => t.trackId === button.dataset.historyPlay);
+                if (track) AudioEngine.playNow(track);
+              });
+            });
+            content.querySelectorAll('[data-history-remove]').forEach(button => {
+              button.addEventListener('click', () => {
+                state.history = state.history.filter(t => t.trackId !== button.dataset.historyRemove);
+                Storage.saveHistory();
+                this.renderQueueDrawer();
+              });
+            });
+            return;
+          }
+
+          const priorityHtml = state.priorityQueue.map((track, index) => this.queueRowTemplate(track, index, 'priority')).join('');
+          const queueHtml = state.queue.map((track, index) => this.queueRowTemplate(track, index, 'queue')).join('');
+          content.innerHTML = `
+            <section class="mb-4">
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">Tocando agora</p>
+              ${state.currentTrack ? this.queueRowTemplate(state.currentTrack, -1, 'current') : '<p class="px-2 text-xs text-white/45">Nenhuma faixa tocando.</p>'}
+            </section>
+            <section class="mb-4">
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300/70">A seguir</p>
+              ${priorityHtml || '<p class="px-2 text-xs text-white/45">Nada na prioridade.</p>'}
+            </section>
+            <section>
+              <p class="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">Próximas na fila</p>
+              ${queueHtml || '<p class="px-2 text-xs text-white/45">A fila está vazia.</p>'}
+            </section>`;
+          lucide.createIcons({ root: content });
+
+          content.querySelectorAll('[data-remove-queue]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              AudioEngine.removeFromQueue(
+                button.dataset.removeQueue,
+                button.dataset.listType,
+                Number(button.dataset.queueIndex)
+              );
+            });
+          });
+          content.querySelectorAll('[data-move-queue]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const from = Number(button.dataset.moveQueue);
+              AudioEngine.reorderQueue(from, from + Number(button.dataset.direction));
+            });
+          });
+          content.querySelectorAll('[data-queue-play]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const listType = button.dataset.listType;
+              const index = Number(button.dataset.queueIndex);
+              const list = listType === 'priority' ? state.priorityQueue : state.queue;
+              const track = list[index];
+              if (track) {
+                if (listType === 'priority' && index >= 0) {
+                  state.priorityQueue.splice(index, 1);
+                } else if (listType === 'queue' && index >= 0) {
+                  state.queue.splice(index, 1);
+                }
+                Storage.saveQueue();
+                AudioEngine.playNow(track);
+                UI.renderQueueDrawer();
+              }
+            });
+          });
+
+          let draggedIndex = null;
+          content.querySelectorAll('[data-draggable-index]').forEach(row => {
+            row.addEventListener('dragstart', () => {
+              draggedIndex = Number(row.dataset.draggableIndex);
+              row.classList.add('dragging');
+            });
+            row.addEventListener('dragend', () => row.classList.remove('dragging'));
+            row.addEventListener('dragover', event => event.preventDefault());
+            row.addEventListener('drop', event => {
+              event.preventDefault();
+              const targetIndex = Number(row.dataset.draggableIndex);
+              if (draggedIndex !== null) AudioEngine.reorderQueue(draggedIndex, targetIndex);
+            });
+          });
+        },
+
+        queueRowTemplate(track, index, listType) {
+          const trackId = track.trackId || track.id || track.videoId || '';
+          const controls = listType === 'current'
+            ? ''
+            : `<button type="button" data-queue-play="${this.escapeHtml(trackId)}" data-list-type="${listType}" data-queue-index="${index}" class="queue-action-button p-1.5 rounded-lg text-white/45 hover:text-white" title="Tocar agora"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>
+               ${listType === 'queue' ? `
+                 <button type="button" data-move-queue="${index}" data-direction="-1" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-white ${index === 0 ? 'opacity-25' : ''}" title="Subir"><i data-lucide="chevron-up" class="w-3.5 h-3.5"></i></button>
+                 <button type="button" data-move-queue="${index}" data-direction="1" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-white ${index === state.queue.length - 1 ? 'opacity-25' : ''}" title="Descer"><i data-lucide="chevron-down" class="w-3.5 h-3.5"></i></button>` : ''}
+               <button type="button" data-remove-queue="${this.escapeHtml(trackId)}" data-list-type="${listType}" data-queue-index="${index}" class="queue-action-button p-1.5 rounded-lg text-white/35 hover:text-rose-400" title="Remover"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>`;
+          return `
+            <div class="queue-track-row flex items-center gap-3 px-2 py-2 rounded-2xl ${listType === 'current' ? 'bg-white/[0.08] border border-white/[0.08]' : 'hover:bg-white/[0.06]'} mb-1"
+                 ${listType === 'queue' ? `draggable="true" data-draggable-index="${index}"` : ''}>
+              <img src="${this.escapeHtml(track.artworkMedium)}" class="w-11 h-11 rounded-xl object-cover border border-white/10" alt="">
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-semibold text-white truncate">${this.escapeHtml(track.title)}</p>
+                <p class="text-[11px] text-white/45 truncate mt-0.5">${this.escapeHtml(track.artist)}</p>
+              </div>
+              <div class="queue-actions flex items-center shrink-0 relative z-[2] pointer-events-auto">${controls}</div>
+            </div>`;
+        },
+
+        openTrackOptions(track, anchor, event) {
+          event?.preventDefault?.();
+          const menu = document.getElementById('track-options-menu');
+          menu.innerHTML = `
+            <button data-track-menu-action="play-now" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="play" class="w-4 h-4"></i>Tocar agora</button>
+            <button data-track-menu-action="play-next" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="corner-down-right" class="w-4 h-4"></i>Tocar a seguir</button>
+            <button data-track-menu-action="add-queue" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="list-plus" class="w-4 h-4"></i>Adicionar à fila</button>
+            <button data-track-menu-action="add-playlist" class="w-full px-3 py-2.5 rounded-xl text-left text-xs text-white/80 hover:text-white hover:bg-white/[0.08] flex items-center gap-2"><i data-lucide="library" class="w-4 h-4"></i>Adicionar à Playlist</button>`;
+          const rect = anchor?.getBoundingClientRect?.();
+          menu.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect?.left ?? event?.clientX ?? 8))}px`;
+          menu.style.top = `${Math.max(8, Math.min(window.innerHeight - 190, rect?.bottom ?? event?.clientY ?? 8))}px`;
+          menu.classList.remove('hidden');
+          lucide.createIcons({ root: menu });
+          menu.querySelectorAll('[data-track-menu-action]').forEach(button => {
+            button.onclick = () => {
+              menu.classList.add('hidden');
+              if (button.dataset.trackMenuAction === 'play-now') AudioEngine.playNow(track);
+              if (button.dataset.trackMenuAction === 'play-next') AudioEngine.playNext(track);
+              if (button.dataset.trackMenuAction === 'add-queue') AudioEngine.addToQueue(track);
+              if (button.dataset.trackMenuAction === 'add-playlist') this.openAddToPlaylistModal(track);
+            };
+          });
+        },
+
+        openImportPlaylistsModal() {
+          document.getElementById('import-playlists-modal')?.classList.remove('hidden');
+          this.renderImportedPlaylists();
+        },
+
+        closeImportPlaylistsModal() {
+          document.getElementById('import-playlists-modal')?.classList.add('hidden');
+        },
+
+        renderImportedPlaylists() {
+          const container = document.getElementById('imported-playlists-list');
+          if (!container) return;
+          if (!state.playlists.length) {
+            container.innerHTML = '<p class="text-xs text-white/45 text-center py-6">Nenhuma playlist salva ainda.</p>';
+            return;
+          }
+          container.innerHTML = state.playlists.map((playlist) => {
+            const cover = playlist.cover || playlist.tracks?.[0]?.artworkMedium || 'https://placehold.co/200x200/10131c/64748b?text=Playlist';
+            return `
+              <div class="glass-panel rounded-2xl p-3 flex items-center gap-3">
+                <img src="${this.escapeHtml(cover)}" alt="" class="w-12 h-12 rounded-xl object-cover border border-white/10 shrink-0" />
+                <button data-imported-open="${this.escapeHtml(playlist.id)}" class="min-w-0 flex-1 text-left">
+                  <p class="text-sm font-semibold text-white truncate">${this.escapeHtml(playlist.name)}</p>
+                  <p class="text-[11px] text-white/45 mt-0.5">${playlist.tracks?.length || 0} músicas</p>
+                </button>
+                <button data-imported-play="${this.escapeHtml(playlist.id)}" class="accent-btn p-2 rounded-xl" title="Tocar playlist">
+                  <i data-lucide="play" class="w-4 h-4 fill-current"></i>
+                </button>
+                <button data-imported-delete="${this.escapeHtml(playlist.id)}" class="glass-chip p-2 rounded-xl text-white/55 hover:text-rose-400" title="Excluir playlist">
+                  <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+              </div>`;
+          }).join('');
+          lucide.createIcons({ root: container });
+
+          container.querySelectorAll('[data-imported-play]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.importedPlay);
+              if (!playlist?.tracks?.length) return;
+              AudioEngine.playNow(playlist.tracks[0], playlist.tracks);
+              this.closeImportPlaylistsModal();
+              this.showToast(`Playlist "${playlist.name}" iniciada`, 'success');
+            });
+          });
+          container.querySelectorAll('[data-imported-delete]').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.importedDelete);
+              if (!playlist) return;
+              const confirmed = await this.openConfirm('Excluir Playlist', `Deseja excluir "${playlist.name}"?`);
+              if (!confirmed) return;
+              state.playlists = state.playlists.filter((item) => item.id !== playlist.id);
+              Storage.savePlaylists();
+              this.renderSidebarPlaylists();
+              this.renderImportedPlaylists();
+              this.showToast('Playlist excluída');
+            });
+          });
+          container.querySelectorAll('[data-imported-open]').forEach((button) => {
+            button.addEventListener('click', () => {
+              this.closeImportPlaylistsModal();
+              this.switchView('playlist-detail', button.dataset.importedOpen);
+            });
+          });
+        },
+
+        parseCsvText(text) {
+          const rows = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+          if (!rows.length) return [];
+          const splitCsv = (line) => {
+            const values = [];
+            let current = '';
+            let quoted = false;
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (char === '"' && line[i + 1] === '"') {
+                current += '"';
+                i++;
+              } else if (char === '"') {
+                quoted = !quoted;
+              } else if (char === ',' && !quoted) {
+                values.push(current.trim());
+                current = '';
+              } else {
+                current += char;
+              }
+            }
+            values.push(current.trim());
+            return values;
+          };
+          const first = splitCsv(rows[0]).map((value) => value.trim().toLocaleLowerCase());
+          const hasHeader = first.some((value) => ['title', 'track', 'track name', 'artist', 'album', 'duration'].includes(value));
+          const headers = hasHeader ? first : ['track', 'artist', 'album', 'duration'];
+          const start = hasHeader ? 1 : 0;
+          return rows.slice(start).map((row, index) => {
+            const values = splitCsv(row);
+            const record = {};
+            headers.forEach((header, column) => { record[header] = values[column] || ''; });
+            const title = record.title || record.track || record['track name'] || record.name;
+            const artist = record.artist || record.artists || record.artistname || '';
+            const album = record.album || record.albumname || 'Arquivo importado';
+            if (!title) return null;
+            const durationParts = String(record.duration || '3:00').split(':').map(Number);
+            const durationSec = durationParts.length === 2
+              ? Math.max(1, durationParts[0] * 60 + (durationParts[1] || 0))
+              : 180;
+            return {
+              trackId: `file-${index}-${title}-${artist}`,
+              title: title.trim(),
+              artist: (artist || 'Artista desconhecido').trim(),
+              album: album.trim(),
+              durationSec,
+              artworkMedium: 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+              artworkLarge: 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+              previewUrl: ''
+            };
+          }).filter(Boolean);
+        },
+
+        parseTxtText(text) {
+          return text.split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line, index) => {
+              const separator = line.includes(' - ') ? ' - ' : (line.includes('|') ? '|' : null);
+              let artist = 'Artista desconhecido';
+              let title = line;
+              if (separator) {
+                const parts = line.split(separator).map((value) => value.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                  artist = parts[0];
+                  title = parts.slice(1).join(' - ');
+                }
+              }
+              return {
+                trackId: `txt-${index}-${title}-${artist}`,
+                title,
+                artist,
+                album: 'Arquivo importado',
+                durationSec: 180,
+                artworkMedium: 'https://placehold.co/600x600/10131c/64748b?text=Glass+Music',
+                artworkLarge: 'https://placehold.co/1000x1000/10131c/64748b?text=Glass+Music',
+                previewUrl: ''
+              };
+            });
+        },
+
         openConfirm(title, description) {
           return new Promise(resolve => {
             const modal = document.getElementById('confirm-modal');
@@ -830,8 +1743,8 @@ import { renderTrackCard } from './ui/renderers.js';
         renderGenreChips() {
           const container = document.getElementById('genre-chips-bar');
           container.innerHTML = DISCOVERY_CHIPS.map(chip => {
-            const active = state.currentView === 'explore' && state.activeChipQuery === chip.query ? 'active' : '';
-            return `<button data-query="${this.escapeHtml(chip.query)}" class="glass-chip ${active} px-3.5 py-1.5 rounded-full text-xs font-medium text-white/80 whitespace-nowrap shrink-0">
+            const active = state.currentView === 'explore' && state.activeDiscoveryCategory === chip.category ? 'active' : '';
+            return `<button data-query="${this.escapeHtml(chip.query)}" data-category="${this.escapeHtml(chip.category)}" class="glass-chip ${active} px-3.5 py-1.5 rounded-full text-xs font-medium text-white/80 whitespace-nowrap shrink-0">
               ${this.escapeHtml(chip.label)}
             </button>`;
           }).join('');
@@ -839,11 +1752,13 @@ import { renderTrackCard } from './ui/renderers.js';
           container.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
               const q = btn.getAttribute('data-query');
+              const category = btn.getAttribute('data-category');
               state.activeChipQuery = q;
+              state.activeDiscoveryCategory = category;
               document.getElementById('search-input').value = '';
               document.getElementById('btn-clear-search').classList.add('hidden');
               this.switchView('explore');
-              this.loadExploreTracks(q, btn.textContent.trim());
+              this.loadExploreTracks(q, btn.textContent.trim(), category);
             });
           });
         },
@@ -860,6 +1775,7 @@ import { renderTrackCard } from './ui/renderers.js';
 
           container.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
+              state.settings.accentMode = 'manual';
               state.settings.accentColor = btn.getAttribute('data-hex');
               Storage.saveSettings();
               ThemeEngine.applyAll();
@@ -884,7 +1800,7 @@ import { renderTrackCard } from './ui/renderers.js';
           `).join('');
         },
 
-        async loadExploreTracks(query, labelTitle = null) {
+        async loadExploreTracks(query, labelTitle = null, category = null) {
           this.renderGenreChips();
           this.showLoadingSkeletons(10);
           document.getElementById('section-title').textContent = labelTitle || `Resultados para "${query}"`;
@@ -892,9 +1808,11 @@ import { renderTrackCard } from './ui/renderers.js';
           document.getElementById('section-actions').innerHTML = '';
 
           try {
-            const tracks = await ApiService.searchTracks(query, 25);
+            const tracks = category
+              ? await ApiService.discoverTracks(category)
+              : await ApiService.searchTracks(query, 25);
             state.displayedTracks = tracks;
-            this.renderTracksGrid(tracks);
+            this.renderTracksGrid(tracks, { context: 'search' });
 
             // Define capa inicial de iluminação ambiente na primeira carga
             if (!state.currentTrack && tracks.length > 0) {
@@ -926,6 +1844,35 @@ import { renderTrackCard } from './ui/renderers.js';
           emptyState.classList.add('hidden');
           tracksGrid.classList.remove('hidden');
 
+          if (options.context === 'playlist') {
+            tracksGrid.className = 'flex flex-col gap-2';
+            tracksGrid.innerHTML = tracks.map((track, idx) => `
+              <article data-track-idx="${idx}" class="glass-card rounded-2xl px-3 py-2.5 flex items-center gap-3 group cursor-pointer">
+                <img src="${this.escapeHtml(track.artworkMedium || track.artworkLarge)}" alt="" class="w-12 h-12 rounded-xl object-cover border border-white/10 shrink-0" />
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold text-white truncate">
+                    ${track.explicit ? '<span class="inline-flex mr-1 px-1 py-0.5 rounded border border-white/20 text-[9px] text-white/60">E</span>' : ''}
+                    ${this.escapeHtml(track.title)}
+                  </h3>
+                  <p class="text-xs text-white/55 truncate">${this.escapeHtml(track.artist)} • ${this.escapeHtml(track.album)}</p>
+                </div>
+                <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${this.formatTime(track.durationSec)}</span>
+                <div class="relative z-[2] flex items-center gap-1 pointer-events-auto opacity-100 md:opacity-0 md:group-hover:opacity-100 transition">
+                  <button data-action="playlist-up" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 ${idx === 0 ? 'opacity-30 pointer-events-none' : ''}" title="Mover para cima">
+                    <i data-lucide="chevron-up" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button data-action="playlist-down" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 ${idx === tracks.length - 1 ? 'opacity-30 pointer-events-none' : ''}" title="Mover para baixo">
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button data-action="playlist-remove" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-rose-400 hover:bg-rose-500/10" title="Remover da playlist">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
+              </article>
+            `).join('');
+            lucide.createIcons({ root: tracksGrid });
+          } else {
+          tracksGrid.className = 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 md:gap-4 pb-6';
           const favIds = new Set(state.favorites.map(f => f.trackId));
 
           tracksGrid.innerHTML = tracks.map((track, idx) => {
@@ -947,9 +1894,14 @@ import { renderTrackCard } from './ui/renderers.js';
                       <button data-action="fav" data-idx="${idx}" class="w-9 h-9 rounded-xl bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center text-white hover:scale-105 transition" title="Favoritar">
                         <i data-lucide="heart" class="w-4 h-4 ${isFav ? 'fill-rose-500 text-rose-500' : ''}"></i>
                       </button>
-                      <button data-action="play" data-idx="${idx}" class="accent-btn w-10 h-10 rounded-xl flex items-center justify-center" title="Tocar agora">
-                        <i data-lucide="${isPlayingThis && state.isPlaying ? 'pause' : 'play'}" class="w-4 h-4 fill-current ${isPlayingThis && state.isPlaying ? '' : 'ml-0.5'}"></i>
-                      </button>
+                      <div class="flex items-center gap-1.5">
+                        <button data-action="play-next" data-idx="${idx}" class="w-9 h-9 rounded-xl bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center text-white hover:scale-105 transition" title="Tocar a seguir">
+                          <i data-lucide="corner-down-right" class="w-4 h-4"></i>
+                        </button>
+                        <button data-action="play" data-idx="${idx}" class="accent-btn w-10 h-10 rounded-xl flex items-center justify-center" title="Tocar agora">
+                          <i data-lucide="${isPlayingThis && state.isPlaying ? 'pause' : 'play'}" class="w-4 h-4 fill-current ${isPlayingThis && state.isPlaying ? '' : 'ml-0.5'}"></i>
+                        </button>
+                      </div>
                     </div>
                     <!-- Selo de Duração -->
                     <span class="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-black/55 backdrop-blur-md font-mono-tech text-[10px] text-white/85 border border-white/10">
@@ -958,6 +1910,7 @@ import { renderTrackCard } from './ui/renderers.js';
                   </div>
 
                   <h3 class="text-sm font-semibold text-white truncate leading-snug" title="${this.escapeHtml(track.title)}">
+                    ${track.explicit ? '<span class="inline-flex align-middle mr-1 px-1 py-0.5 rounded border border-white/20 text-[9px] leading-none text-white/60" title="Conteúdo explícito">E</span>' : ''}
                     ${this.escapeHtml(track.title)}
                   </h3>
                   <p class="text-xs text-white/55 truncate mt-0.5" title="${this.escapeHtml(track.artist)}">
@@ -974,11 +1927,15 @@ import { renderTrackCard } from './ui/renderers.js';
                     <button data-action="add-pl" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition" title="Adicionar à Playlist">
                       <i data-lucide="list-plus" class="w-3.5 h-3.5"></i>
                     </button>
+                    <button data-action="menu" data-idx="${idx}" class="p-1.5 rounded-lg text-white/45 hover:text-white hover:bg-white/10 transition" title="Mais opções">
+                      <i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>
+                    </button>
                   </div>
                 </div>
               </article>
             `;
           }).join('');
+          }
 
           lucide.createIcons({ root: tracksGrid });
 
@@ -997,17 +1954,47 @@ import { renderTrackCard } from './ui/renderers.js';
                   this.toggleFavorite(track);
                 } else if (action === 'add-pl') {
                   this.openAddToPlaylistModal(track);
+                } else if (action === 'play-next') {
+                  AudioEngine.playNext(track);
+                } else if (action === 'menu') {
+                  this.openTrackOptions(track, actionBtn, e);
+                } else if (action === 'playlist-up' || action === 'playlist-down' || action === 'playlist-remove') {
+                  const playlist = state.playlists.find((item) => item.id === state.activePlaylistId);
+                  if (!playlist) return;
+                  if (action === 'playlist-remove') {
+                    Storage.removeTrackFromPlaylist(playlist.id, idx);
+                  } else if (action === 'playlist-up' && idx > 0) {
+                    Storage.moveTrackInPlaylist(playlist.id, idx, idx - 1);
+                  } else if (action === 'playlist-down' && idx < tracks.length - 1) {
+                    Storage.moveTrackInPlaylist(playlist.id, idx, idx + 1);
+                  }
+                  this.renderCurrentView();
                 } else if (action === 'play') {
                   if (state.currentTrack?.trackId === track.trackId) {
                     AudioEngine.togglePlayPause();
                   } else {
-                    AudioEngine.playTrack(track, tracks);
+                    if (options.context === 'favorites' || options.context === 'playlist') {
+                      AudioEngine.playNow(track, tracks);
+                    } else {
+                      AudioEngine.playNow(track);
+                    }
                   }
                 }
                 return;
               }
 
-              AudioEngine.playTrack(track, tracks);
+              if (options.context === 'favorites' || options.context === 'playlist') {
+                AudioEngine.playNow(track, tracks);
+              } else {
+                AudioEngine.playNow(track);
+              }
+            });
+
+            card.addEventListener('contextmenu', (event) => {
+              event.preventDefault();
+              const idx = parseInt(card.getAttribute('data-track-idx'), 10);
+              const track = tracks[idx];
+              if (track) this.openTrackOptions(track, card, event);
             });
           });
         },
@@ -1043,9 +2030,13 @@ import { renderTrackCard } from './ui/renderers.js';
 
           if (state.currentView === 'explore') {
             if (state.displayedTracks.length === 0) {
-              this.loadExploreTracks(state.activeChipQuery, 'Em Alta Agora');
+              this.loadExploreTracks(
+                state.activeChipQuery,
+                'Em Alta Agora',
+                state.activeDiscoveryCategory
+              );
             } else {
-              this.renderTracksGrid(state.displayedTracks);
+              this.renderTracksGrid(state.displayedTracks, { context: 'search' });
             }
             return;
           }
@@ -1060,11 +2051,12 @@ import { renderTrackCard } from './ui/renderers.js';
               </button>`;
               lucide.createIcons({ root: actionsEl });
               document.getElementById('btn-play-all-favs').addEventListener('click', () => {
-                AudioEngine.playTrack(state.favorites[0], state.favorites);
+                AudioEngine.playNow(state.favorites[0], state.favorites);
               });
             }
             state.displayedTracks = state.favorites;
             this.renderTracksGrid(state.favorites, {
+              context: 'favorites',
               emptyTitle: 'Nenhum favorito ainda',
               emptyDesc: 'Toque no ícone de coração em qualquer música para salvá-la aqui.'
             });
@@ -1092,6 +2084,7 @@ import { renderTrackCard } from './ui/renderers.js';
             }
             state.displayedTracks = state.history;
             this.renderTracksGrid(state.history, {
+              context: 'history',
               emptyTitle: 'Histórico vazio',
               emptyDesc: 'As músicas que você reproduzir aparecerão automaticamente aqui.'
             });
@@ -1114,14 +2107,32 @@ import { renderTrackCard } from './ui/renderers.js';
               this.switchView('explore');
               return;
             }
-            titleEl.textContent = pl.name;
-            subEl.textContent = `Playlist Local • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'}`;
+            const totalSeconds = (pl.tracks || []).reduce((sum, track) =>
+              sum + (Number(track.durationSec) || 0), 0
+            );
+            const durationText = totalSeconds >= 3600
+              ? `${Math.floor(totalSeconds / 3600)}h ${Math.round((totalSeconds % 3600) / 60)}min`
+              : `${Math.max(1, Math.round(totalSeconds / 60))}min`;
+            titleEl.innerHTML = `<span data-playlist-header-title="${this.escapeHtml(pl.id)}">${this.escapeHtml(pl.name)}</span>`;
+            subEl.textContent = `Playlist Local • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'} • ${durationText}`;
             actionsEl.innerHTML = `
-              ${pl.tracks.length > 0 ? `<button id="btn-play-pl" class="accent-btn px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5">
+              ${pl.tracks.length > 0 ? `<button id="btn-play-pl" class="accent-btn px-3 py-2 rounded-2xl text-xs flex items-center gap-1.5">
                 <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i>
-                <span>Tocar</span>
+                <span>Tocar Tudo</span>
+              </button>
+              <button id="btn-shuffle-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="shuffle" class="w-3.5 h-3.5"></i>
+                <span>Aleatório</span>
               </button>` : ''}
-              <button id="btn-delete-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-1">
+              <button id="btn-rename-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                <span>Renomear</span>
+              </button>
+              ${pl.tracks.length > 0 ? `<button id="btn-export-pl" class="glass-chip px-3 py-2 rounded-2xl text-xs text-white/80 flex items-center gap-1.5">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Exportar CSV</span>
+              </button>` : ''}
+              <button id="btn-delete-pl" data-confirm-delete="0" class="glass-chip px-3 py-2 rounded-2xl text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-1">
                 <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                 <span>Excluir</span>
               </button>
@@ -1129,21 +2140,57 @@ import { renderTrackCard } from './ui/renderers.js';
             lucide.createIcons({ root: actionsEl });
 
             document.getElementById('btn-play-pl')?.addEventListener('click', () => {
-              AudioEngine.playTrack(pl.tracks[0], pl.tracks);
+              AudioEngine.playNow(pl.tracks[0], pl.tracks);
             });
-            document.getElementById('btn-delete-pl')?.addEventListener('click', async () => {
-              const ok = await this.openConfirm('Excluir Playlist', `Tem certeza que deseja excluir "${pl.name}"?`);
-              if (ok) {
-                state.playlists = state.playlists.filter(p => p.id !== pl.id);
-                Storage.savePlaylists();
-                this.renderSidebarPlaylists();
-                this.showToast('Playlist excluída.');
-                this.switchView('explore');
+            document.getElementById('btn-shuffle-pl')?.addEventListener('click', () => {
+              if (!pl.tracks.length) return;
+              const shuffled = [...pl.tracks];
+              for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
               }
+              AudioEngine.playNow(shuffled[0], shuffled);
+            });
+            document.getElementById('btn-rename-pl')?.addEventListener('click', () => {
+              const title = document.querySelector(`[data-playlist-header-title="${CSS.escape(pl.id)}"]`);
+              if (title) {
+                this.startInlineRename(title, pl, (name) => {
+                  titleEl.textContent = name || pl.name;
+                  this.renderSidebarPlaylists();
+                  this.renderMobilePlaylistsCards();
+                });
+              }
+            });
+            document.getElementById('btn-export-pl')?.addEventListener('click', () => {
+              if (Storage.exportPlaylistCSV(pl.id)) this.showToast('CSV da playlist exportado', 'success');
+            });
+            const deleteButton = document.getElementById('btn-delete-pl');
+            deleteButton?.addEventListener('click', () => {
+              if (deleteButton.dataset.confirmDelete !== '1') {
+                deleteButton.dataset.confirmDelete = '1';
+                deleteButton.querySelector('span').textContent = 'Confirmar excluir';
+                deleteButton.classList.add('bg-rose-500/20');
+                setTimeout(() => {
+                  if (deleteButton.isConnected) {
+                    deleteButton.dataset.confirmDelete = '0';
+                    const label = deleteButton.querySelector('span');
+                    if (label) label.textContent = 'Excluir';
+                    deleteButton.classList.remove('bg-rose-500/20');
+                  }
+                }, 3500);
+                return;
+              }
+              deleteButton.dataset.confirmDelete = '0';
+              state.playlists = state.playlists.filter(p => p.id !== pl.id);
+              Storage.savePlaylists();
+              this.renderSidebarPlaylists();
+              this.showToast('Playlist excluída.');
+              this.switchView('explore');
             });
 
             state.displayedTracks = pl.tracks;
             this.renderTracksGrid(pl.tracks, {
+              context: 'playlist',
               emptyTitle: 'Esta playlist está vazia',
               emptyDesc: 'Clique no ícone de lista (+) em qualquer música para adicioná-la aqui.'
             });
@@ -1158,11 +2205,30 @@ import { renderTrackCard } from './ui/renderers.js';
           }
           container.innerHTML = state.playlists.map(pl => {
             const active = state.currentView === 'playlist-detail' && state.activePlaylistId === pl.id;
-            return `<button data-pl-id="${pl.id}" class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition ${active ? 'bg-white/15 text-white font-semibold' : 'text-white/70 hover:text-white hover:bg-white/5'}">
-              <span class="truncate pr-2">${this.escapeHtml(pl.name)}</span>
-              <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${pl.tracks.length}</span>
-            </button>`;
+            return `<div class="group flex items-center rounded-xl ${active ? 'bg-white/15' : 'hover:bg-white/5'}">
+              <button data-pl-id="${this.escapeHtml(pl.id)}" class="min-w-0 flex-1 flex items-center justify-between px-3 py-2 text-xs transition ${active ? 'text-white font-semibold' : 'text-white/70 hover:text-white'}">
+                <span class="truncate pr-2">${this.escapeHtml(pl.name)}</span>
+                <span class="font-mono-tech text-[10px] text-white/45 shrink-0">${pl.tracks.length}</span>
+              </button>
+              <button data-sidebar-rename="${this.escapeHtml(pl.id)}" class="p-2 mr-1 rounded-lg text-white/35 hover:text-white hover:bg-white/10" title="Renomear">
+                <i data-lucide="pencil" class="w-3 h-3"></i>
+              </button>
+            </div>`;
           }).join('');
+
+          container.querySelectorAll('button[data-sidebar-rename]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.sidebarRename);
+              const row = button.closest('div');
+              const title = row?.querySelector('[data-pl-id] span');
+              if (!playlist || !title) return;
+              this.startInlineRename(title, playlist, () => {
+                this.renderSidebarPlaylists();
+                this.renderMobilePlaylistsCards();
+              });
+            });
+          });
 
           container.querySelectorAll('button[data-pl-id]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -1179,21 +2245,25 @@ import { renderTrackCard } from './ui/renderers.js';
             </div>`;
             return;
           }
-          container.innerHTML = state.playlists.map(pl => {
-            const cover = pl.tracks[0]?.artworkMedium || 'https://placehold.co/200x200/10131c/64748b?text=Playlist';
-            return `<div data-pl-id="${pl.id}" class="glass-card rounded-2xl p-3 flex items-center gap-3 cursor-pointer">
-              <img src="${this.escapeHtml(cover)}" alt="" class="w-14 h-14 rounded-xl object-cover border border-white/10 shrink-0" />
-              <div class="min-w-0 flex-1">
-                <h4 class="text-sm font-semibold text-white truncate">${this.escapeHtml(pl.name)}</h4>
-                <p class="text-xs text-white/50 mt-0.5">${pl.tracks.length} ${pl.tracks.length === 1 ? 'música' : 'músicas'}</p>
-              </div>
-              <i data-lucide="chevron-right" class="w-4 h-4 text-white/40"></i>
-            </div>`;
-          }).join('');
+          container.innerHTML = state.playlists.map(pl => renderPlaylistCard(pl)).join('');
           lucide.createIcons({ root: container });
 
+          container.querySelectorAll('[data-playlist-rename]').forEach(button => {
+            button.addEventListener('click', (event) => {
+              event.stopPropagation();
+              const playlist = state.playlists.find((item) => item.id === button.dataset.playlistRename);
+              const title = container.querySelector(`[data-playlist-title="${CSS.escape(playlist.id)}"]`);
+              if (!playlist || !title) return;
+              this.startInlineRename(title, playlist, () => {
+                this.renderMobilePlaylistsCards();
+                this.renderSidebarPlaylists();
+              });
+            });
+          });
+
           container.querySelectorAll('[data-pl-id]').forEach(card => {
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (event) => {
+              if (event.target.closest('[data-playlist-rename]')) return;
               this.switchView('playlist-detail', card.getAttribute('data-pl-id'));
             });
           });
@@ -1249,6 +2319,14 @@ import { renderTrackCard } from './ui/renderers.js';
           document.getElementById('fs-title').textContent = track.title;
           document.getElementById('fs-artist').textContent = `${track.artist} • ${track.album}`;
 
+          // Mini-player flutuante
+          const miniCover = document.getElementById('mini-player-cover');
+          const miniTitle = document.getElementById('mini-player-title');
+          const miniArtist = document.getElementById('mini-player-artist');
+          if (miniCover) miniCover.src = track.artworkMedium || track.artworkLarge || './glassmusic.svg';
+          if (miniTitle) miniTitle.textContent = track.title;
+          if (miniArtist) miniArtist.textContent = track.artist;
+
           this.updateNowPlayingFavIcons();
 
           // Destaca card ativo na grade
@@ -1272,6 +2350,12 @@ import { renderTrackCard } from './ui/renderers.js';
           setBtnIcon('btn-desktop-play', 'w-5 h-5');
           setBtnIcon('btn-mobile-mini-play', 'w-4 h-4');
           setBtnIcon('btn-fs-play', 'w-7 h-7');
+          const miniPlay = document.getElementById('btn-mini-play');
+          if (miniPlay) {
+            miniPlay.innerHTML = `<i id="icon-mini-play" data-lucide="${iconName}" class="w-4 h-4 fill-current"></i>`;
+            miniPlay.title = state.isPlaying ? 'Pausar' : 'Reproduzir';
+            lucide.createIcons({ root: miniPlay });
+          }
 
           const eq = document.getElementById('desktop-playing-eq');
           if (eq) eq.classList.toggle('paused', !state.isPlaying);
@@ -1435,12 +2519,14 @@ import { renderTrackCard } from './ui/renderers.js';
           searchTimer = setTimeout(() => {
             if (val.length >= 2) {
               state.activeChipQuery = '';
+              state.activeDiscoveryCategory = null;
               UI.switchView('explore');
               UI.loadExploreTracks(val, `Resultados para "${val}"`);
             } else if (val.length === 0) {
               state.activeChipQuery = DISCOVERY_CHIPS[0].query;
+              state.activeDiscoveryCategory = DISCOVERY_CHIPS[0].category;
               UI.switchView('explore');
-              UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+              UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora', DISCOVERY_CHIPS[0].category);
             }
           }, 420);
         });
@@ -1449,16 +2535,141 @@ import { renderTrackCard } from './ui/renderers.js';
           searchInput.value = '';
           clearBtn.classList.add('hidden');
           state.activeChipQuery = DISCOVERY_CHIPS[0].query;
+          state.activeDiscoveryCategory = DISCOVERY_CHIPS[0].category;
           UI.switchView('explore');
-          UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+          UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora', DISCOVERY_CHIPS[0].category);
         });
 
         // Controles de Reprodução Desktop
         document.getElementById('btn-desktop-play').addEventListener('click', () => AudioEngine.togglePlayPause());
         document.getElementById('btn-desktop-next').addEventListener('click', () => AudioEngine.nextTrack());
         document.getElementById('btn-desktop-prev').addEventListener('click', () => AudioEngine.prevTrack());
+        const miniPlayerButton = document.getElementById('btn-desktop-mini-player');
+        if (window.electronAPI?.toggleMiniPlayer && miniPlayerButton) {
+          miniPlayerButton.classList.remove('hidden');
+          miniPlayerButton.style.display = 'inline-flex';
+          miniPlayerButton.addEventListener('click', () => UI.setMiniPlayer(true));
+        }
+        document.getElementById('btn-mini-expand')?.addEventListener('click', () => UI.setMiniPlayer(false));
+        document.getElementById('btn-mini-prev')?.addEventListener('click', () => AudioEngine.prevTrack());
+        document.getElementById('btn-mini-play')?.addEventListener('click', () => AudioEngine.togglePlayPause());
+        document.getElementById('btn-mini-next')?.addEventListener('click', () => AudioEngine.nextTrack());
+        document.getElementById('mini-player-progress')?.addEventListener('input', (event) => {
+          AudioEngine.seekToPercent(parseFloat(event.target.value));
+        });
+        window.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && state.isMiniPlayer) {
+            void UI.setMiniPlayer(false);
+          }
+        });
         document.getElementById('btn-desktop-fav').addEventListener('click', () => UI.toggleFavorite(state.currentTrack));
         document.getElementById('btn-desktop-add-pl').addEventListener('click', () => UI.openAddToPlaylistModal(state.currentTrack));
+        document.getElementById('btn-desktop-queue')?.addEventListener('click', () => UI.toggleQueueDrawer());
+        document.getElementById('btn-mobile-mini-queue')?.addEventListener('click', () => UI.toggleQueueDrawer());
+        document.getElementById('btn-close-queue')?.addEventListener('click', () => UI.toggleQueueDrawer(false));
+        document.getElementById('queue-backdrop')?.addEventListener('click', () => UI.toggleQueueDrawer(false));
+        document.getElementById('btn-clear-queue')?.addEventListener('click', () => AudioEngine.clearQueue());
+        document.querySelectorAll('[data-queue-tab]').forEach(tab => {
+          tab.addEventListener('click', () => {
+            state.queueTab = tab.dataset.queueTab;
+            UI.renderQueueDrawer();
+          });
+        });
+        document.getElementById('toggle-autoplay-radio')?.addEventListener('click', () => {
+          state.autoPlayEnabled = !state.autoPlayEnabled;
+          state.settings.autoPlayEnabled = state.autoPlayEnabled;
+          Storage.saveSettings();
+          UI.renderQueueDrawer();
+          UI.showToast(
+            state.autoPlayEnabled
+              ? 'Reprodução Automática ativada'
+              : 'Reprodução Automática desativada',
+            'success'
+          );
+        });
+        document.getElementById('btn-open-import-playlists')?.addEventListener('click', () => {
+          UI.openImportPlaylistsModal();
+        });
+        document.getElementById('btn-close-import-playlists')?.addEventListener('click', () => {
+          UI.closeImportPlaylistsModal();
+        });
+        document.getElementById('btn-create-playlist-from-import')?.addEventListener('click', () => {
+          UI.closeImportPlaylistsModal();
+          UI.openCreatePlaylistModal();
+        });
+        document.getElementById('btn-import-spotify-playlist')?.addEventListener('click', async () => {
+          const input = document.getElementById('input-spotify-playlist-url');
+          const url = input.value.trim();
+          if (!url) {
+            UI.showToast('Cole o link público da playlist', 'error');
+            return;
+          }
+          const button = document.getElementById('btn-import-spotify-playlist');
+          button.disabled = true;
+          button.textContent = 'Importando...';
+          try {
+            const imported = await ApiService.importSpotifyPlaylist(url);
+            const tracks = (imported.tracks || []).map((track, index) => ({
+              trackId: track.trackId || `spotify-${index}-${track.title}-${track.artist}`,
+              title: track.title,
+              artist: track.artist,
+              album: track.album || 'Spotify',
+              durationSec: track.durationSec || 180,
+              artworkMedium: track.artworkMedium || track.cover || 'https://placehold.co/600x600/10131c/64748b?text=Spotify',
+              artworkLarge: track.artworkLarge || track.cover || 'https://placehold.co/1000x1000/10131c/64748b?text=Spotify',
+              previewUrl: track.previewUrl || ''
+            }));
+            if (!tracks.length) throw new Error('Nenhuma faixa foi encontrada');
+            const playlist = {
+              id: `pl_import_${Date.now()}`,
+              name: imported.name || 'Playlist do Spotify',
+              cover: imported.cover || tracks[0].artworkMedium,
+              source: 'spotify',
+              tracks
+            };
+            state.playlists.unshift(playlist);
+            Storage.savePlaylists();
+            UI.renderSidebarPlaylists();
+            UI.renderImportedPlaylists();
+            UI.showToast(`"${playlist.name}" importada`, 'success');
+            input.value = '';
+          } catch (error) {
+            UI.showToast(error.message, 'error');
+          } finally {
+            button.disabled = false;
+            button.textContent = 'Importar';
+          }
+        });
+        document.getElementById('input-import-playlist-file')?.addEventListener('change', async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const isCsv = file.name.toLocaleLowerCase().endsWith('.csv');
+            const tracks = isCsv ? UI.parseCsvText(text) : UI.parseTxtText(text);
+            if (!tracks.length) throw new Error('Nenhuma música encontrada no arquivo');
+            const playlist = {
+              id: `pl_file_${Date.now()}`,
+              name: file.name.replace(/\.(csv|txt)$/i, '') || 'Playlist importada',
+              cover: tracks[0].artworkMedium,
+              source: isCsv ? 'csv' : 'txt',
+              tracks
+            };
+            state.playlists.unshift(playlist);
+            Storage.savePlaylists();
+            UI.renderSidebarPlaylists();
+            UI.renderImportedPlaylists();
+            UI.showToast(`"${playlist.name}" importada`, 'success');
+            event.target.value = '';
+          } catch (error) {
+            UI.showToast(error.message, 'error');
+          }
+        });
+        document.addEventListener('click', (event) => {
+          if (!event.target.closest('#track-options-menu') && !event.target.closest('[data-action="menu"]')) {
+            document.getElementById('track-options-menu')?.classList.add('hidden');
+          }
+        });
 
         document.getElementById('desktop-progress').addEventListener('input', (e) => {
           AudioEngine.seekToPercent(parseFloat(e.target.value));
@@ -1566,6 +2777,7 @@ import { renderTrackCard } from './ui/renderers.js';
         document.getElementById('btn-done-customizer').addEventListener('click', closeCustomizer);
 
         document.getElementById('input-accent-picker').addEventListener('input', (e) => {
+          state.settings.accentMode = 'manual';
           state.settings.accentColor = e.target.value;
           Storage.saveSettings();
           ThemeEngine.applyAll();
@@ -1590,6 +2802,33 @@ import { renderTrackCard } from './ui/renderers.js';
           ThemeEngine.applyAll();
         });
 
+        document.getElementById('btn-accent-auto')?.addEventListener('click', () => {
+          state.settings.accentMode = 'auto';
+          Storage.saveSettings();
+          if (state.currentTrack?.artworkLarge) {
+            ThemeEngine.extractDominantAccent(state.currentTrack.artworkLarge);
+          }
+          ThemeEngine.applyAll();
+          UI.renderAccentPresets();
+        });
+
+        document.querySelectorAll('[data-atmosphere]').forEach(button => {
+          button.addEventListener('click', () => {
+            if (state.settings.oledMode) return;
+            state.settings.atmosphereMode = button.dataset.atmosphere;
+            Storage.saveSettings();
+            ThemeEngine.applyAll();
+            if (state.currentTrack?.artworkLarge) ThemeEngine.setAmbientArtwork(state.currentTrack.artworkLarge);
+          });
+        });
+
+        document.getElementById('toggle-frequency-visualizer')?.addEventListener('click', () => {
+          state.settings.frequencyVisualizer = !state.settings.frequencyVisualizer;
+          Storage.saveSettings();
+          ThemeEngine.applyAll();
+          ThemeEngine.initAudioVisualizer();
+        });
+
         document.getElementById('btn-test-backend').addEventListener('click', async () => {
           const url = document.getElementById('input-backend-url').value.trim() || DEFAULT_SETTINGS.backendUrl;
           state.settings.backendUrl = url;
@@ -1603,9 +2842,11 @@ import { renderTrackCard } from './ui/renderers.js';
 
         document.getElementById('btn-reset-glass').addEventListener('click', () => {
           state.settings = { ...DEFAULT_SETTINGS };
+          state.autoPlayEnabled = true;
           Storage.saveSettings();
           ThemeEngine.applyAll();
           UI.renderAccentPresets();
+          ThemeEngine.initAudioVisualizer();
           UI.showToast('Estética do vidro restaurada para o padrão.');
         });
 
@@ -1646,6 +2887,133 @@ import { renderTrackCard } from './ui/renderers.js';
         });
       }
 
+      function setupUpdateBanner() {
+        const updater = window.electronUpdater || window.glassMusicUpdater;
+        if (!updater) return;
+        const banner = document.getElementById('update-banner');
+        const title = document.getElementById('update-banner-title');
+        const detail = document.getElementById('update-banner-detail');
+        const progressWrap = document.getElementById('update-progress-wrap');
+        const progressBar = document.getElementById('update-progress-bar');
+        const restartButton = document.getElementById('btn-restart-update');
+        if (!banner || !title || !detail || !progressWrap || !progressBar || !restartButton) return;
+
+        restartButton.addEventListener('click', () => {
+          restartButton.disabled = true;
+          restartButton.textContent = 'Reiniciando...';
+          updater.restartAndInstall();
+        });
+
+        const checkDetail = document.getElementById('update-check-detail');
+        const checkButton = document.getElementById('btn-check-updates');
+        checkButton?.addEventListener('click', () => {
+          if (checkDetail) checkDetail.textContent = 'Verificando...';
+          checkButton.disabled = true;
+          checkButton.textContent = 'Verificando...';
+          updater.checkForUpdates();
+        });
+
+        updater.onUpdateStatus((payload) => {
+          if (!payload?.status) return;
+          if (payload.status === 'checking') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Verificando atualizações';
+            detail.textContent = 'Consultando o GitHub Releases...';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Verificando atualizações...';
+            if (checkButton) {
+              checkButton.disabled = true;
+              checkButton.textContent = 'Verificando...';
+            }
+          } else if (payload.status === 'download-progress') {
+            const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+            banner.classList.remove('hidden');
+            title.textContent = 'Baixando atualização';
+            detail.textContent = `${percent.toFixed(0)}% concluído`;
+            progressWrap.classList.remove('hidden');
+            progressBar.style.width = `${percent}%`;
+            restartButton.classList.add('hidden');
+          } else if (payload.status === 'update-downloaded') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Atualização pronta';
+            detail.textContent = payload.version
+              ? `Versão ${payload.version} instalada no cache`
+              : 'A nova versão está pronta';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.remove('hidden');
+            lucide.createIcons({ root: banner });
+            if (checkDetail) checkDetail.textContent = `Versão ${payload.version || ''} pronta`;
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
+          } else if (payload.status === 'update-available') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Atualização disponível';
+            detail.textContent = payload.version ? `Baixando versão ${payload.version}...` : 'Baixando atualização...';
+            progressWrap.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = `Atualização ${payload.version || ''} disponível`;
+          } else if (payload.status === 'update-not-available') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Você já está atualizado';
+            detail.textContent = payload.currentVersion
+              ? `Versão atual: ${payload.currentVersion}`
+              : 'Nenhuma atualização encontrada';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = `Você já está na versão ${payload.currentVersion || ''}`;
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
+            setTimeout(() => banner.classList.add('hidden'), 5000);
+          } else if (payload.status === 'development') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Modo desenvolvimento';
+            detail.textContent = payload.message || 'Atualizações disponíveis na versão instalada';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Verificação disponível na versão instalada';
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
+          } else if (payload.status === 'error') {
+            banner.classList.remove('hidden');
+            title.textContent = 'Falha ao atualizar';
+            detail.textContent = payload.message || 'Não foi possível verificar a atualização';
+            progressWrap.classList.add('hidden');
+            restartButton.classList.add('hidden');
+            if (checkDetail) checkDetail.textContent = 'Erro ao verificar atualizações';
+            if (checkButton) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Verificar atualizações';
+            }
+          }
+        });
+      }
+
+      async function setupAppVersion() {
+        let version = window.glassMusicVersion?.get?.() || '';
+        if (!version) {
+          try {
+            const response = await fetch('/api/version', { cache: 'no-store' });
+            if (response.ok) version = (await response.json()).version || '';
+          } catch (error) {
+            console.warn('Não foi possível obter a versão do aplicativo:', error.message);
+          }
+        }
+        if (!version) return;
+        const label = `v${version.replace(/^v/i, '')}`;
+        const sidebarVersion = document.getElementById('app-version-sidebar');
+        const customizerVersion = document.getElementById('app-version-customizer');
+        if (sidebarVersion) sidebarVersion.textContent = label;
+        if (customizerVersion) customizerVersion.textContent = `Versão atual: ${label}`;
+      }
+
       function setupPWA() {
         if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
           navigator.serviceWorker.register(new URL('./sw.js', document.baseURI))
@@ -1671,6 +3039,13 @@ import { renderTrackCard } from './ui/renderers.js';
       /* ======================================================================
          BOOTSTRAP DA APLICAÇÃO
          ====================================================================== */
+function hideSplashScreen() {
+  const splash = document.getElementById('app-splash');
+  if (!splash || splash.classList.contains('app-splash--hidden')) return;
+  splash.classList.add('app-splash--hidden');
+  setTimeout(() => splash.remove(), 400);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
         Storage.load();
   applyTheme(state.settings);
@@ -1679,7 +3054,10 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.renderGenreChips();
         UI.renderSidebarPlaylists();
         UI.updateFavoritesBadge();
+        UI.updateQueueBadge();
         UI.updateTechnicalBadge();
+        setupUpdateBanner();
+        void setupAppVersion();
 
         AudioEngine.init();
         bindEvents();
@@ -1688,5 +3066,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Verifica status do servidor Node.js proxy e carrega catálogo inicial
         ApiService.checkBackendHealth();
-        UI.loadExploreTracks(DISCOVERY_CHIPS[0].query, 'Em Alta Agora');
+        UI.loadExploreTracks(
+          DISCOVERY_CHIPS[0].query,
+          'Em Alta Agora',
+          DISCOVERY_CHIPS[0].category
+        );
+        requestAnimationFrame(hideSplashScreen);
 });
+
+setTimeout(hideSplashScreen, 3500);

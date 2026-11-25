@@ -8,6 +8,56 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Glass Music">
   <meta name="description" content="Glass Music - Streaming de música gratuito, sem anúncios, com estética de vidro fosco e reprodução em segundo plano.">
+  <style>
+    html, body {
+      background-color: #050507;
+      color: #f8fafc;
+      margin: 0;
+    }
+    #app-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: radial-gradient(circle at 50% 35%, rgba(56, 189, 248, 0.12), #050507 65%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      transition: opacity 0.35s ease, visibility 0.35s ease;
+    }
+    #app-splash .app-splash-title {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f8fafc;
+    }
+    #app-splash .app-splash-loader {
+      width: 44px;
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.16);
+    }
+    #app-splash .app-splash-loader::before {
+      content: "";
+      display: block;
+      width: 45%;
+      height: 100%;
+      border-radius: inherit;
+      background: #38bdf8;
+      animation: app-splash-progress 1s ease-in-out infinite;
+    }
+    .app-splash--hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    @keyframes app-splash-progress {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(260%); }
+    }
+  </style>
   <link rel="icon" href="./glassmusic.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./glassmusic.svg">
   <link rel="manifest" href="./manifest.webmanifest">
@@ -18,9 +68,33 @@
   <link rel="stylesheet" href="./styles/glass.css">
   <link rel="stylesheet" href="./styles/layout.css">
   <link rel="stylesheet" href="./styles/components.css">
-  <title>Glass Music - Streaming & Glassmorphism Player</title>
+  <title>Glass Music - Streaming & Player</title>
 </head>
 <body class="antialiased selection:bg-sky-400/30 selection:text-white">
+  <div id="app-splash" role="status" aria-label="Carregando Glass Music">
+    <img src="./glassmusic.svg" width="56" height="56" alt="" />
+    <div class="app-splash-title">Glass Music</div>
+    <div class="app-splash-loader" aria-hidden="true"></div>
+  </div>
+
+  <section id="mini-player-shell" class="mini-player-shell" aria-label="Mini-player Glass Music">
+    <button id="btn-mini-expand" class="mini-player-expand" type="button" title="Expandir modo completo">
+      <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+    </button>
+    <img id="mini-player-cover" class="mini-player-cover" src="./glassmusic.svg" alt="" />
+    <div class="mini-player-content">
+      <div class="mini-player-meta">
+        <div id="mini-player-title" class="mini-player-title">Glass Music</div>
+        <div id="mini-player-artist" class="mini-player-artist">Pronto para tocar</div>
+      </div>
+      <div class="mini-player-controls">
+        <button id="btn-mini-prev" type="button" title="Anterior"><i data-lucide="skip-back" class="w-4 h-4"></i></button>
+        <button id="btn-mini-play" type="button" title="Tocar / Pausar"><i id="icon-mini-play" data-lucide="play" class="w-4 h-4 fill-current"></i></button>
+        <button id="btn-mini-next" type="button" title="Próxima"><i data-lucide="skip-forward" class="w-4 h-4"></i></button>
+      </div>
+    </div>
+    <input id="mini-player-progress" class="mini-player-progress" type="range" min="0" max="100" step="0.1" value="0" aria-label="Progresso da música" />
+  </section>
   <!-- Elemento de Áudio Nativo HTML5 (Permite reprodução contínua em segundo plano no Android & iOS) -->
   <audio id="native-audio" preload="metadata" crossorigin="anonymous"></audio>
 
@@ -49,6 +123,7 @@
             <div>
               <h1 class="font-bold text-base tracking-tight text-white leading-tight">Glass Music</h1>
               <span class="text-[11px] font-medium text-white/50 tracking-wider uppercase">Hi-Fi Glass PWA</span>
+              <span id="app-version-sidebar" class="block text-[10px] font-mono-tech text-white/40 tracking-wide">v—</span>
             </div>
           </div>
           <button id="btn-install-pwa-desktop" class="hidden glass-chip p-2 rounded-xl text-white/80 hover:text-white" title="Instalar App (PWA)">
@@ -147,6 +222,10 @@
               <i data-lucide="sparkles" class="w-4 h-4 accent-text"></i>
               <span class="hidden sm:inline">Personalizar</span>
             </button>
+            <button id="btn-open-import-playlists" class="glass-chip px-3.5 py-2.5 rounded-2xl flex items-center gap-2 text-xs font-semibold text-white shrink-0" title="Minhas Playlists">
+              <i data-lucide="library" class="w-4 h-4 accent-text"></i>
+              <span class="hidden sm:inline">Playlists</span>
+            </button>
           </div>
 
           <!-- Chips Rápidos de Gêneros & Artistas -->
@@ -236,6 +315,7 @@
        BARRA DE REPRODUÇÃO COMPLETA NO RODAPÉ (DESKTOP >= 768px)
        ======================================================================== -->
   <footer id="desktop-player-bar" class="hidden md:flex fixed bottom-3 left-4 right-4 z-30 glass-panel-elevated rounded-3xl px-5 py-3 items-center justify-between gap-4">
+    <canvas id="audio-spectrum" class="pointer-events-none absolute left-[30%] right-[30%] bottom-0 h-8 opacity-0 transition-opacity" aria-hidden="true"></canvas>
     <!-- Esquerda: Capa, Metadados, Favorito & Selo Técnico -->
     <div class="flex items-center gap-3.5 w-[30%] min-w-0">
       <div class="relative w-14 h-14 rounded-2xl overflow-hidden shrink-0 bg-white/5 border border-white/15 shadow-lg group">
@@ -305,8 +385,15 @@
         <input id="desktop-volume" type="range" min="0" max="1" step="0.01" value="0.85" class="glass-slider" aria-label="Volume" />
       </div>
 
+      <button id="btn-desktop-queue" class="glass-chip relative p-2 rounded-xl text-white/75 hover:text-white" title="Fila de reprodução">
+        <i data-lucide="list-music" class="w-4 h-4"></i>
+        <span id="queue-count-desktop" class="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-[var(--accent-color)] text-black text-[9px] font-bold items-center justify-center hidden">0</span>
+      </button>
       <button id="btn-desktop-expand" class="glass-chip p-2 rounded-xl text-white/75 hover:text-white" title="Modo Imersivo">
         <i data-lucide="maximize-2" class="w-4 h-4"></i>
+      </button>
+      <button id="btn-desktop-mini-player" class="hidden glass-chip p-2 rounded-xl text-white/75 hover:text-white" style="display: none" title="Mini-player">
+        <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
       </button>
     </div>
   </footer>
@@ -341,6 +428,10 @@
         </button>
         <button id="btn-mobile-mini-next" class="p-2 rounded-xl text-white/80">
           <i data-lucide="skip-forward" class="w-4 h-4"></i>
+        </button>
+        <button id="btn-mobile-mini-queue" class="relative p-2 rounded-xl text-white/80" title="Fila de reprodução">
+          <i data-lucide="list-music" class="w-4 h-4"></i>
+          <span id="queue-count-mobile" class="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--accent-color)] text-black text-[9px] font-bold items-center justify-center hidden">0</span>
         </button>
       </div>
     </div>
@@ -510,6 +601,7 @@
               <span>Livre</span>
               <input id="input-accent-picker" type="color" value="#38bdf8" class="w-5 h-5 rounded cursor-pointer bg-transparent border-0 p-0" />
             </label>
+            <button id="btn-accent-auto" type="button" class="glass-chip px-3 py-1.5 rounded-xl text-xs text-white/80">Auto</button>
           </div>
         </div>
 
@@ -541,6 +633,43 @@
           <button id="toggle-oled-mode" type="button" role="switch" aria-checked="false"
                   class="w-12 h-7 rounded-full bg-white/15 p-1 transition-colors relative shrink-0">
             <span id="toggle-oled-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-0"></span>
+          </button>
+        </div>
+
+        <!-- 4. Atmosfera de Fundo -->
+        <div class="glass-panel rounded-2xl p-3.5 space-y-3">
+          <div>
+            <h4 class="text-sm font-semibold text-white">Atmosfera de Fundo</h4>
+            <p id="atmosphere-status" class="text-[11px] text-white/55 mt-0.5">Ativa enquanto o modo OLED estiver desligado</p>
+          </div>
+          <div id="atmosphere-options" class="grid grid-cols-3 gap-1.5">
+            <button type="button" data-atmosphere="soft" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Brilho Suave</button>
+            <button type="button" data-atmosphere="immersive" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Capa Imersiva</button>
+            <button type="button" data-atmosphere="aurora" class="glass-chip atmosphere-option px-2 py-2 rounded-xl text-[11px] text-white/75">Aurora Viva</button>
+          </div>
+        </div>
+
+        <!-- 5. Visualizador de Frequências -->
+        <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between gap-3">
+          <div>
+            <h4 class="text-sm font-semibold text-white">Visualizador de Frequências</h4>
+            <p class="text-[11px] text-white/55 mt-0.5">Barras translúcidas na barra inferior do player</p>
+          </div>
+          <button id="toggle-frequency-visualizer" type="button" role="switch" aria-checked="false"
+                  class="w-12 h-7 rounded-full bg-white/15 p-1 transition-colors relative shrink-0">
+            <span id="toggle-frequency-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-0"></span>
+          </button>
+        </div>
+
+        <!-- 6. Atualizações Automáticas -->
+        <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h4 class="text-sm font-semibold text-white">Atualizações</h4>
+            <p id="app-version-customizer" class="text-[11px] text-white/40 mt-0.5">Versão atual: v—</p>
+            <p id="update-check-detail" class="text-[11px] text-white/55 mt-0.5 truncate">Verifique se há uma versão mais recente</p>
+          </div>
+          <button id="btn-check-updates" type="button" class="glass-chip px-3 py-2 rounded-xl text-[11px] text-white/80 shrink-0">
+            Verificar atualizações
           </button>
         </div>
 
@@ -577,6 +706,58 @@
       <div class="px-5 py-3.5 border-t border-white/10 flex items-center justify-between">
         <button id="btn-reset-glass" class="text-xs text-white/55 hover:text-white transition">Restaurar Padrão</button>
         <button id="btn-done-customizer" class="accent-btn px-5 py-2 rounded-xl text-xs">Concluir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       MODAL: MINHAS PLAYLISTS / IMPORTADOR
+       ======================================================================== -->
+  <div id="import-playlists-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3 sm:p-6 bg-black/65 backdrop-blur-sm">
+    <div class="glass-panel-elevated w-full max-w-xl rounded-3xl overflow-hidden max-h-[90dvh] flex flex-col">
+      <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center bg-white/10 border border-white/15">
+            <i data-lucide="library" class="w-4 h-4 accent-text"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white">Minhas Playlists</h3>
+            <p class="text-[11px] text-white/55">Importe Spotify, CSV ou TXT</p>
+          </div>
+        </div>
+        <button id="btn-close-import-playlists" class="p-2 rounded-xl text-white/60 hover:text-white hover:bg-white/10" aria-label="Fechar">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="p-5 overflow-y-auto space-y-4">
+        <div class="glass-panel rounded-2xl p-3.5 space-y-3">
+          <label for="input-spotify-playlist-url" class="text-xs font-semibold text-white/75">URL pública do Spotify</label>
+          <div class="flex gap-2">
+            <input id="input-spotify-playlist-url" type="url" placeholder="https://open.spotify.com/playlist/..."
+                   class="flex-1 min-w-0 bg-black/35 text-xs text-white px-3 py-2.5 rounded-xl border border-white/15 focus:border-white/40 focus:outline-none" />
+            <button id="btn-import-spotify-playlist" class="accent-btn px-3.5 py-2 rounded-xl text-xs shrink-0">Importar</button>
+          </div>
+          <p class="text-[11px] text-white/45 leading-relaxed">
+            Para importar músicas curtidas: selecione tudo no Spotify com <strong class="text-white/65">Ctrl+A</strong>,
+            adicione em uma playlist pública e cole o link dela aqui.
+          </p>
+        </div>
+
+        <div class="glass-panel rounded-2xl p-3.5 space-y-2">
+          <label for="input-import-playlist-file" class="text-xs font-semibold text-white/75 block">Arquivo CSV / TXT</label>
+          <input id="input-import-playlist-file" type="file" accept=".csv,.txt,text/csv,text/plain"
+                 class="block w-full text-xs text-white/55 file:mr-3 file:rounded-xl file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-xs file:text-white hover:file:bg-white/15" />
+          <p class="text-[10px] text-white/40">CSV: title,artist,album,duration — TXT: cada linha “Artista - Título”.</p>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-white/60">Playlists salvas</h4>
+            <button id="btn-create-playlist-from-import" class="glass-chip px-2.5 py-1.5 rounded-xl text-[11px] text-white/75">Nova playlist</button>
+          </div>
+          <div id="imported-playlists-list" class="space-y-2 max-h-72 overflow-y-auto"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -641,6 +822,60 @@
        NOTIFICAÇÃO TOAST DE VIDRO (Substitui alert() nativo)
        ======================================================================== -->
   <div id="toast-container" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none max-w-xs w-full"></div>
+
+  <div id="update-banner" class="hidden fixed right-4 bottom-24 z-[61] glass-panel-elevated w-[min(360px,calc(100vw-32px))] rounded-2xl p-3.5 border border-white/10"
+       style="backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
+    <div class="flex items-start gap-3">
+      <div class="w-9 h-9 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center shrink-0">
+        <i data-lucide="download-cloud" class="w-4 h-4 accent-text"></i>
+      </div>
+      <div class="min-w-0 flex-1">
+        <p id="update-banner-title" class="text-xs font-semibold text-white">Atualização disponível</p>
+        <p id="update-banner-detail" class="text-[11px] text-white/55 mt-1">Preparando download...</p>
+        <div id="update-progress-wrap" class="hidden mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+          <div id="update-progress-bar" class="h-full rounded-full transition-[width] duration-300" style="width:0%; background:var(--accent-color);"></div>
+        </div>
+      </div>
+      <button id="btn-restart-update" class="hidden accent-btn px-3 py-2 rounded-xl text-[11px] shrink-0">Reiniciar e Atualizar</button>
+    </div>
+  </div>
+
+  <div id="queue-backdrop" class="fixed inset-0 z-[52] bg-black/45 backdrop-blur-sm opacity-0 pointer-events-none transition-opacity"></div>
+  <aside id="queue-drawer" class="fixed top-3 bottom-3 right-3 z-[53] w-[min(390px,calc(100vw-24px))] overflow-hidden rounded-3xl translate-x-[calc(100%+24px)] transition-transform duration-300"
+         style="background: rgba(12, 14, 22, 0.92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); box-shadow: -18px 0 55px rgba(0,0,0,0.55);">
+    <div class="h-full flex flex-col">
+      <div class="px-4 pt-4 pb-3 border-b border-white/[0.08] flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-white">Fila de reprodução</h2>
+        <div class="flex items-center gap-1">
+          <button id="btn-clear-queue" class="glass-chip px-2.5 py-1.5 rounded-xl text-[11px] text-white/70 hover:text-white">Limpar fila</button>
+          <button id="btn-close-queue" class="glass-chip p-2 rounded-xl text-white/70 hover:text-white" aria-label="Fechar fila">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+      <div class="px-4 pt-3 flex items-center gap-1">
+        <button data-queue-tab="queue" class="queue-tab glass-chip active flex-1 py-2 rounded-xl text-xs text-white/70">Fila</button>
+        <button data-queue-tab="history" class="queue-tab glass-chip flex-1 py-2 rounded-xl text-xs text-white/70">Histórico</button>
+      </div>
+      <div class="px-4 pt-3">
+        <button id="toggle-autoplay-radio" type="button" role="switch" aria-checked="true"
+                class="w-full glass-chip px-3.5 py-2.5 rounded-2xl flex items-center justify-between gap-3">
+          <span class="flex items-center gap-2 text-xs font-medium text-white/80">
+            <i data-lucide="radio" class="w-4 h-4 accent-text"></i>
+            <span>Reprodução Automática</span>
+          </span>
+          <span class="relative w-11 h-6 rounded-full p-0.5 transition-colors bg-[var(--accent-color)]">
+            <span id="toggle-autoplay-knob" class="block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-[20px]"></span>
+          </span>
+        </button>
+      </div>
+      <div id="queue-drawer-content" class="flex-1 overflow-y-auto px-3 pb-4 pt-3"></div>
+    </div>
+  </aside>
+
+  <div id="track-options-menu" class="fixed z-[70] hidden min-w-48 rounded-2xl p-1.5"
+       style="background: rgba(18,20,30,0.96); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 18px 50px rgba(0,0,0,0.6);">
+  </div>
 
   <!-- ========================================================================
        LÓGICA MODULAR JAVASCRIPT (API ITUNES, LRCLIB, PROXY NODE.JS, MEDIA SESSION & PWA)

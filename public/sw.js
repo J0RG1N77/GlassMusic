@@ -1,4 +1,4 @@
-const CACHE_NAME = 'glass-music-shell-v1';
+const CACHE_NAME = 'glassmusic-v1.4.0';
 const APP_SHELL = ['./', './index.html', './styles/tokens.css', './styles/glass.css', './styles/layout.css', './styles/components.css', './js/main.js'];
 
 self.addEventListener('install', (event) => {
