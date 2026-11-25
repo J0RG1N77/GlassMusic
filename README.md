@@ -1,15 +1,25 @@
 # 🎧 Glass Music
 
-PWA de streaming musical com interface **Glassmorphism**, reprodução em segundo plano e proxy de áudio self-hosted. O projeto usa JavaScript nativo com ES Modules, Node.js/Express no backend e `yt-dlp` para extrair streams de áudio do YouTube sob demanda.
+[![Site Oficial](https://img.shields.io/badge/Site_Oficial-glassmusic.vercel.app-38BDF8?style=for-the-badge&logo=vercel&logoColor=white)](https://glassmusic.vercel.app/)
+[![Versão](https://img.shields.io/badge/Release-v1.3.0-10B981?style=for-the-badge&logo=github&logoColor=white)](https://github.com/J0RG1N77/GlassMusic/releases/latest)
+[![Plataforma](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://glassmusic.vercel.app/)
+
+> 🌐 **Site Oficial & Download (Windows):** [https://glassmusic.vercel.app/](https://glassmusic.vercel.app/)
+
+Player de streaming musical desktop (Windows) e PWA com interface **Glassmorphism**, reprodução em segundo plano e proxy de áudio self-hosted. O projeto utiliza JavaScript nativo com ES Modules, Node.js/Express no backend, Electron no desktop e `yt-dlp` para extrair streams de áudio sob demanda.
 
 > **Status:** projeto experimental/educacional. O catálogo, previews, letras e streams dependem de serviços externos e podem sofrer limitações de disponibilidade, região, CORS ou mudanças de API.
+
+
+## 💻 Interface 
+<img width="1910" height="997" alt="interface" src="https://github.com/user-attachments/assets/1c6039a5-ea0c-43a5-b8b4-3e6ba9dae1b6" />
+
 
 
 ## 📱 Interface Mobile
 
 <img width="334" height="600" alt="GlassmMusicHome" src="https://github.com/user-attachments/assets/bb7afd6e-7a36-4913-aefe-fe96768e37e0" />
 <img width="334" height="600" alt="GlassMusicCapa" src="https://github.com/user-attachments/assets/b954f7b8-480f-4a24-9a94-f8116c30f595" />
-<img width="334" height="600" alt="GlassMusicLetras" src="https://github.com/user-attachments/assets/30387f5c-5e55-4a63-a672-136912450828" />
 
 
 ## ✨ Funcionalidades
@@ -260,6 +270,38 @@ O App Shell é definido em `public/sw.js`. O Service Worker:
 - exige HTTPS em produção para ser registrado corretamente.
 
 Depois de alterar arquivos públicos em produção, incremente `CACHE_NAME` em `public/sw.js` ou limpe os dados do site no navegador para evitar cache antigo.
+
+## 🖥️ Aplicativo Desktop para Windows
+
+O mesmo backend e a mesma pasta `public/` também podem ser executados como aplicativo nativo Windows com Electron. O processo principal inicia o Express na porta `3001`, aguarda `/api/health` responder e abre a interface em uma `BrowserWindow` de 1200x800. Links externos são encaminhados ao navegador padrão.
+
+### Desenvolvimento
+
+Certifique-se de que `desktop/bin/yt-dlp.exe` exista localmente e execute:
+
+```bash
+npm run desktop:dev
+```
+
+Durante o desenvolvimento, o backend procura o executável em `desktop/bin/yt-dlp.exe`. Esse binário é ignorado pelo Git para evitar versionar um arquivo grande; cada ambiente de desenvolvimento deve instalar ou fornecer sua própria cópia.
+
+### Gerar o instalador
+
+```bash
+npm run desktop:build
+```
+
+O `electron-builder` gera o instalador NSIS em `dist/`. O `yt-dlp.exe` não é colocado dentro do `app.asar`; ele é copiado para `resources/bin/yt-dlp.exe` através de `extraResources`, permitindo execução no Windows empacotado.
+
+O instalador é configurado para:
+
+- usar o identificador `com.glassmusic.desktop`;
+- exibir o produto como `Glass Music`;
+- permitir instalação em diretório escolhido pelo usuário;
+- criar um instalador NSIS de 64 bits;
+- manter o frontend web/Docker e os scripts `npm start` inalterados.
+
+O executável gerado não é assinado digitalmente por padrão. Para distribuição pública, configure um certificado de assinatura de código e os parâmetros correspondentes do `electron-builder`.
 
 ## 🧩 Serviços externos
 
