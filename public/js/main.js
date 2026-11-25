@@ -517,10 +517,12 @@ import { renderPlaylistCard } from './ui/renderers.js';
 
         // Busca metadados oficiais no iTunes Search API (sem necessidade de chave)
         async searchTracks(query, limit = 25) {
+          const cleanQuery = String(query || '').trim();
+          if (!cleanQuery) return [];
           const baseUrl = state.settings.backendUrl.replace(/\/$/, '');
           try {
             const response = await fetch(
-              `${baseUrl}/api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+              `${baseUrl}/api/search?q=${encodeURIComponent(cleanQuery)}&limit=${limit}`,
               { cache: 'no-store' }
             );
             if (response.ok) {
@@ -531,7 +533,7 @@ import { renderPlaylistCard } from './ui/renderers.js';
             console.warn('Busca combinada indisponível:', error.message);
           }
 
-          const encodedQuery = encodeURIComponent(query);
+          const encodedQuery = encodeURIComponent(cleanQuery);
           const responses = await Promise.allSettled([
             fetch(`https://itunes.apple.com/search?country=US&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`),
             fetch(`https://itunes.apple.com/search?country=BR&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`)
@@ -767,7 +769,6 @@ import { renderPlaylistCard } from './ui/renderers.js';
 
           // Tenta reproduzir via Proxy Node.js com fallback automático caso falhe
           let fallbackTriggered = false;
-          let proxyRetryAttempted = false;
           const fallbackToPreview = async () => {
             if (fallbackTriggered) return;
             fallbackTriggered = true;
@@ -777,12 +778,8 @@ import { renderPlaylistCard } from './ui/renderers.js';
             // Uma falha de stream não prova que o proxy está offline.
             const proxyIsHealthy = await ApiService.checkBackendHealth(baseUrl, 4000);
             if (state.currentTrack?.trackId !== track.trackId) return;
-            if (proxyIsHealthy && !proxyRetryAttempted && state.currentTrack?.trackId === track.trackId) {
-              proxyRetryAttempted = true;
-              fallbackTriggered = false;
-              audio.removeEventListener('error', onProxyError);
-              audio.addEventListener('error', onProxyError, { once: true });
-              this.startStream(proxyStreamUrl, 'proxy');
+            if (proxyIsHealthy) {
+              UI.showToast('O servidor está ativo, mas não conseguiu resolver esta faixa. Verifique o yt-dlp no servidor.', 'error');
               return;
             }
 

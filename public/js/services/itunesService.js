@@ -3,7 +3,9 @@ const artwork = (url, size) => url
   : `https://placehold.co/${size}x${size}/10131c/64748b?text=Glass+Music`;
 
 export async function searchTracks(query, limit = 25) {
-  const proxySearch = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return [];
+  const proxySearch = await fetch(`/api/search?q=${encodeURIComponent(cleanQuery)}&limit=${limit}`, {
     cache: 'no-store'
   }).catch(() => null);
   if (proxySearch?.ok) {
@@ -11,7 +13,7 @@ export async function searchTracks(query, limit = 25) {
     if (Array.isArray(proxyData.tracks) && proxyData.tracks.length > 0) return proxyData.tracks;
   }
 
-  const encodedQuery = encodeURIComponent(query);
+  const encodedQuery = encodeURIComponent(cleanQuery);
   const responses = await Promise.allSettled([
     fetch(`https://itunes.apple.com/search?country=US&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`),
     fetch(`https://itunes.apple.com/search?country=BR&media=music&entity=song&limit=${limit}&explicit=Yes&term=${encodedQuery}`)

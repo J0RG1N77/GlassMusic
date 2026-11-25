@@ -53,22 +53,38 @@ async function extractDirectAudioUrl(videoUrl) {
     '--no-warnings',
     '--quiet',
     '--dump-single-json',
-    '--format', 'bestaudio[ext=webm]/bestaudio/best',
+    '--format', 'bestaudio/best',
     videoUrl
   ];
+  const jsArgs = ['--js-runtimes', 'node', '--remote-components', 'ejs:github'];
+  const commandArgs = [...jsArgs, ...args];
   if (process.env.YOUTUBE_COOKIES) {
-    args.unshift('--cookies', process.env.YOUTUBE_COOKIES);
+    commandArgs.unshift('--cookies', process.env.YOUTUBE_COOKIES);
   }
 
   let stdout;
   try {
-    ({ stdout } = await execFileAsync(executable, args, {
+    ({ stdout } = await execFileAsync(executable, commandArgs, {
       maxBuffer: 10 * 1024 * 1024,
+      timeout: 25_000,
       windowsHide: true
     }));
   } catch (error) {
     const detail = error.stderr?.trim() || error.message;
-    throw new Error(`yt-dlp não conseguiu extrair o áudio: ${detail}`);
+    if (/unknown option|no such option/i.test(detail) && /--js-runtimes|--remote-components/.test(detail)) {
+      try {
+        ({ stdout } = await execFileAsync(executable, args, {
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 25_000,
+          windowsHide: true
+        }));
+      } catch (fallbackError) {
+        const fallbackDetail = fallbackError.stderr?.trim() || fallbackError.message;
+        throw new Error(`yt-dlp não conseguiu extrair o áudio: ${fallbackDetail}`);
+      }
+    } else {
+      throw new Error(`yt-dlp não conseguiu extrair o áudio: ${detail}`);
+    }
   }
 
   let metadata;
@@ -100,7 +116,7 @@ async function findYtDlpExecutable() {
     ] : [])
   ].filter(Boolean).filter((candidate, index, list) => list.indexOf(candidate) === index);
 
-  for (const candidate of candidates) {
+  for (const candidate of candidates.slice(0, 3)) {
     try {
       await execFileAsync(candidate, ['--version'], { windowsHide: true });
       return candidate;
@@ -151,6 +167,7 @@ export async function resolveYouTubeStream({ artist, title, duration }) {
         } catch (error) {
           lastError = error;
           console.warn(`Falha ao extrair candidato "${candidate.title}": ${error.message}`);
+          if (/Requested format is not available|no formats found/i.test(error.message)) break;
         }
       }
       if (!resolved) {
